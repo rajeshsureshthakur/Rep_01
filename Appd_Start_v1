@@ -1,0 +1,510 @@
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClients;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.util.EntityUtils;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import java.time.*;
+import java.util.*;
+import java.io.*;
+import java.text.SimpleDateFormat;
+import java.util.stream.Collectors;
+
+public class AppDynamicsPerformanceMonitor {
+    private final String controllerUrl;
+    private final String username;
+    private final String password;
+    private final String accountName;
+
+    // Default thresholds for alerts
+    private static final class DefaultThresholds {
+        static final double CPU_WARNING = 70.0;
+        static final double CPU_CRITICAL = 85.0;
+        static final double MEMORY_WARNING = 75.0;
+        static final double MEMORY_CRITICAL = 90.0;
+        static final double RESPONSE_TIME_WARNING = 1000.0; // ms
+        static final double RESPONSE_TIME_CRITICAL = 2000.0; // ms
+    }
+
+    // Anomaly detection settings
+    private static final double ANOMALY_ZSCORE_THRESHOLD = 3.0;
+    private static final int PEAK_WINDOW_SIZE = 3; // hours
+
+    public static class ServerMetrics {
+        public final double cpuUsage;
+        public final double memoryUsed;
+        public final double memoryFree;
+        public final double diskIOReads;
+        public final double diskIOWrites;
+        public final double networkReceived;
+        public final double networkSent;
+        public final int activeThreads;
+        public final double responseTime;
+        public final LocalDateTime timestamp;
+
+        public ServerMetrics(JSONObject metrics, LocalDateTime timestamp) {
+            this.cpuUsage = metrics.optDouble("cpuUsage", 0.0);
+            this.memoryUsed = metrics.optDouble("memoryUsed", 0.0);
+            this.memoryFree = metrics.optDouble("memoryFree", 0.0);
+            this.diskIOReads = metrics.optDouble("diskReads", 0.0);
+            this.diskIOWrites = metrics.optDouble("diskWrites", 0.0);
+            this.networkReceived = metrics.optDouble("networkReceived", 0.0);
+            this.networkSent = metrics.optDouble("networkSent", 0.0);
+            this.activeThreads = metrics.optInt("activeThreads", 0);
+            this.responseTime = metrics.optDouble("responseTime", 0.0);
+            this.timestamp = timestamp;
+        }
+    }
+
+    public static class PerformanceAlert {
+        public final String metric;
+        public final double value;
+        public final String severity;
+        public final String message;
+        public final LocalDateTime timestamp;
+
+        public PerformanceAlert(String metric, double value, String severity, 
+                              String message, LocalDateTime timestamp) {
+            this.metric = metric;
+            this.value = value;
+            this.severity = severity;
+            this.message = message;
+            this.timestamp = timestamp;
+        }
+    }
+
+    public static class PerformanceAnalysis {
+        public final Map<Double, Double> responseTimePercentiles;
+        public final List<ServerMetrics> peakUsagePeriods;
+        public final List<ServerMetrics> anomalies;
+        public final List<PerformanceAlert> alerts;
+        public final ServerMetrics averageMetrics;
+
+        public PerformanceAnalysis(Map<Double, Double> responseTimePercentiles,
+                                 List<ServerMetrics> peakUsagePeriods,
+                                 List<ServerMetrics> anomalies,
+                                 List<PerformanceAlert> alerts,
+                                 ServerMetrics averageMetrics) {
+            this.responseTimePercentiles = responseTimePercentiles;
+            this.peakUsagePeriods = peakUsagePeriods;
+            this.anomalies = anomalies;
+            this.alerts = alerts;
+            this.averageMetrics = averageMetrics;
+        }
+    }
+
+    // Constructor and existing methods remain the same...
+    // (Keep all previous methods from the first version)
+
+    // Calculate percentiles for response times
+    private Map<Double, Double> calculateResponseTimePercentiles(List<ServerMetrics> metrics) {
+        List<Double> responseTimes = metrics.stream()
+            .map(m -> m.responseTime)
+            .sorted()
+            .collect(Collectors.toList());
+
+        Map<Double, Double> percentiles = new HashMap<>();
+        double[] percentilesWanted = {50.0, 75.0, 90.0, 95.0, 99.0};
+
+        for (double p : percentilesWanted) {
+            int index = (int) Math.ceil((p / 100.0) * responseTimes.size()) - 1;
+            percentiles.put(p, responseTimes.get(Math.max(0, index)));
+        }
+
+        return percentiles;
+    }
+
+    // Detect peak usage periods
+    private List<ServerMetrics> detectPeakUsagePeriods(List<ServerMetrics> metrics) {
+        List<ServerMetrics> peaks = new ArrayList<>();
+        
+        if (metrics.size() < PEAK_WINDOW_SIZE) return peaks;
+
+        for (int i = 1; i < metrics.size() - 1; i++) {
+            boolean isPeak = true;
+            for (int j = Math.max(0, i - PEAK_WINDOW_SIZE); 
+                 j < Math.min(metrics.size(), i + PEAK_WINDOW_SIZE + 1); j++) {
+                if (j != i && metrics.get(j).cpuUsage > metrics.get(i).cpuUsage) {
+                    isPeak = false;
+                    break;
+                }
+            }
+            if (isPeak) peaks.add(metrics.get(i));
+        }
+
+        return peaks;
+    }
+
+    // Detect anomalies using Z-score method
+    private List<ServerMetrics> detectAnomalies(List<ServerMetrics> metrics) {
+        List<ServerMetrics> anomalies = new ArrayList<>();
+        
+        // Calculate mean and standard deviation for various metrics
+        double[] means = new double[4];
+        double[] stdDevs = new double[4];
+        
+        // Index mapping: 0=CPU, 1=Memory, 2=Response Time, 3=Network
+        for (ServerMetrics metric : metrics) {
+            means[0] += metric.cpuUsage;
+            means[1] += metric.memoryUsed;
+            means[2] += metric.responseTime;
+            means[3] += metric.networkReceived + metric.networkSent;
+        }
+        
+        for (int i = 0; i < means.length; i++) {
+            means[i] /= metrics.size();
+        }
+        
+        // Calculate standard deviations
+        for (ServerMetrics metric : metrics) {
+            stdDevs[0] += Math.pow(metric.cpuUsage - means[0], 2);
+            stdDevs[1] += Math.pow(metric.memoryUsed - means[1], 2);
+            stdDevs[2] += Math.pow(metric.responseTime - means[2], 2);
+            stdDevs[3] += Math.pow((metric.networkReceived + metric.networkSent) - means[3], 2);
+        }
+        
+        for (int i = 0; i < stdDevs.length; i++) {
+            stdDevs[i] = Math.sqrt(stdDevs[i] / metrics.size());
+        }
+        
+        // Detect anomalies
+        for (ServerMetrics metric : metrics) {
+            boolean isAnomaly = false;
+            
+            // Check each metric for anomalies
+            if (Math.abs((metric.cpuUsage - means[0]) / stdDevs[0]) > ANOMALY_ZSCORE_THRESHOLD ||
+                Math.abs((metric.memoryUsed - means[1]) / stdDevs[1]) > ANOMALY_ZSCORE_THRESHOLD ||
+                Math.abs((metric.responseTime - means[2]) / stdDevs[2]) > ANOMALY_ZSCORE_THRESHOLD ||
+                Math.abs(((metric.networkReceived + metric.networkSent) - means[3]) / stdDevs[3]) > 
+                    ANOMALY_ZSCORE_THRESHOLD) {
+                anomalies.add(metric);
+            }
+        }
+        
+        return anomalies;
+    }
+
+    // Generate alerts based on thresholds
+    private List<PerformanceAlert> generateAlerts(List<ServerMetrics> metrics) {
+        List<PerformanceAlert> alerts = new ArrayList<>();
+        
+        for (ServerMetrics metric : metrics) {
+            // CPU alerts
+            if (metric.cpuUsage >= DefaultThresholds.CPU_CRITICAL) {
+                alerts.add(new PerformanceAlert(
+                    "CPU Usage",
+                    metric.cpuUsage,
+                    "CRITICAL",
+                    String.format("CPU usage is critically high: %.2f%%", metric.cpuUsage),
+                    metric.timestamp
+                ));
+            } else if (metric.cpuUsage >= DefaultThresholds.CPU_WARNING) {
+                alerts.add(new PerformanceAlert(
+                    "CPU Usage",
+                    metric.cpuUsage,
+                    "WARNING",
+                    String.format("CPU usage is high: %.2f%%", metric.cpuUsage),
+                    metric.timestamp
+                ));
+            }
+            
+            // Memory alerts
+            double memoryUsagePercent = (metric.memoryUsed / 
+                                      (metric.memoryUsed + metric.memoryFree)) * 100;
+            if (memoryUsagePercent >= DefaultThresholds.MEMORY_CRITICAL) {
+                alerts.add(new PerformanceAlert(
+                    "Memory Usage",
+                    memoryUsagePercent,
+                    "CRITICAL",
+                    String.format("Memory usage is critically high: %.2f%%", memoryUsagePercent),
+                    metric.timestamp
+                ));
+            } else if (memoryUsagePercent >= DefaultThresholds.MEMORY_WARNING) {
+                alerts.add(new PerformanceAlert(
+                    "Memory Usage",
+                    memoryUsagePercent,
+                    "WARNING",
+                    String.format("Memory usage is high: %.2f%%", memoryUsagePercent),
+                    metric.timestamp
+                ));
+            }
+            
+            // Response time alerts
+            if (metric.responseTime >= DefaultThresholds.RESPONSE_TIME_CRITICAL) {
+                alerts.add(new PerformanceAlert(
+                    "Response Time",
+                    metric.responseTime,
+                    "CRITICAL",
+                    String.format("Response time is critically high: %.2f ms", metric.responseTime),
+                    metric.timestamp
+                ));
+            } else if (metric.responseTime >= DefaultThresholds.RESPONSE_TIME_WARNING) {
+                alerts.add(new PerformanceAlert(
+                    "Response Time",
+                    metric.responseTime,
+                    "WARNING",
+                    String.format("Response time is high: %.2f ms", metric.responseTime),
+                    metric.timestamp
+                ));
+            }
+        }
+        
+        return alerts;
+    }
+
+    // Comprehensive performance analysis
+    public PerformanceAnalysis analyzePerformance(List<ServerMetrics> metrics) {
+        Map<Double, Double> responseTimePercentiles = calculateResponseTimePercentiles(metrics);
+        List<ServerMetrics> peakUsagePeriods = detectPeakUsagePeriods(metrics);
+        List<ServerMetrics> anomalies = detectAnomalies(metrics);
+        List<PerformanceAlert> alerts = generateAlerts(metrics);
+        ServerMetrics averageMetrics = calculateAverageMetrics(metrics);
+
+        return new PerformanceAnalysis(
+            responseTimePercentiles,
+            peakUsagePeriods,
+            anomalies,
+            alerts,
+            averageMetrics
+        );
+    }
+
+    // Export comprehensive analysis report to HTML
+    public void exportAnalysisReport(PerformanceAnalysis analysis, String fileName) 
+                                   throws IOException {
+        try (FileWriter writer = new FileWriter(fileName)) {
+            SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+            
+            writer.write("<html><head><style>\n");
+            writer.write("table { border-collapse: collapse; width: 100%; }\n");
+            writer.write("th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }\n");
+            writer.write("th { background-color: #f2f2f2; }\n");
+            writer.write(".warning { color: orange; }\n");
+            writer.write(".critical { color: red; }\n");
+            writer.write("</style></head><body>\n");
+            
+            // Response Time Percentiles
+            writer.write("<h2>Response Time Percentiles</h2>\n");
+            writer.write("<table><tr><th>Percentile</th><th>Response Time (ms)</th></tr>\n");
+            for (Map.Entry<Double, Double> entry : analysis.responseTimePercentiles.entrySet()) {
+                writer.write(String.format("<tr><td>P%.1f</td><td>%.2f</td></tr>\n",
+                    entry.getKey(), entry.getValue()));
+            }
+            writer.write("</table>\n");
+            
+            // Peak Usage Periods
+            writer.write("<h2>Peak Usage Periods</h2>\n");
+            writer.write("<table><tr><th>Timestamp</th><th>CPU Usage</th>" +
+                        "<th>Memory Used</th><th>Response Time</th></tr>\n");
+            for (ServerMetrics peak : analysis.peakUsagePeriods) {
+                writer.write(String.format("<tr><td>%s</td><td>%.2f%%</td><td>%.2f MB</td>" +
+                                         "<td>%.2f ms</td></tr>\n",
+                    dateFormat.format(Date.from(peak.timestamp.atZone(ZoneId.systemDefault())
+                                    .toInstant())),
+                    peak.cpuUsage,
+                    peak.memoryUsed,
+                    peak.responseTime));
+            }
+            writer.write("</table>\n");
+            
+            // Anomalies
+            writer.write("<h2>Detected Anomalies</h2>\n");
+            writer.write("<table><tr><th>Timestamp</th><th>CPU Usage</th>" +
+                        "<th>Memory Used</th><th>Response Time</th></tr>\n");
+            for (ServerMetrics anomaly : analysis.anomalies) {
+                writer.write(String.format("<tr><td>%s</td><td>%.2f%%</td><td>%.2f MB</td>" +
+                                         "<td>%.2f ms</td></tr>\n",
+                    dateFormat.format(Date.from(anomaly.timestamp.atZone(ZoneId.systemDefault())
+                                    .toInstant())),
+                    anomaly.cpuUsage,
+                    anomaly.memoryUsed,
+                    anomaly.responseTime));
+            }
+            writer.write("</table>\n");
+            
+            // Alerts
+            writer.write("<h2>Performance Alerts</h2>\n");
+            writer.write("<table><tr><th>Timestamp</th><th>Metric</th><th>Value</th>" +
+                        "<th>Severity</th><th>Message</th></tr>\n");
+            for (PerformanceAlert alert : analysis.alerts) {
+                writer.write(String.format("<tr class='%s'><td>%s</td><td>%s</td><td>%.2f</td>" +
+            dateFormat.format(Date.from(alert.timestamp.atZone(ZoneId.systemDefault())
+                                    .toInstant())),
+                    alert.metric,
+                    alert.value,
+                    alert.severity.toLowerCase(),
+                    alert.message));
+            }
+            writer.write("</table>\n");
+            
+            // Average Metrics
+            writer.write("<h2>Average Metrics</h2>\n");
+            writer.write("<table>\n");
+            writer.write(String.format("<tr><td>Average CPU Usage</td><td>%.2f%%</td></tr>\n",
+                analysis.averageMetrics.cpuUsage));
+            writer.write(String.format("<tr><td>Average Memory Used</td><td>%.2f MB</td></tr>\n",
+                analysis.averageMetrics.memoryUsed));
+            writer.write(String.format("<tr><td>Average Response Time</td><td>%.2f ms</td></tr>\n",
+                analysis.averageMetrics.responseTime));
+            writer.write(String.format("<tr><td>Average Network Received</td><td>%.2f/s</td></tr>\n",
+                analysis.averageMetrics.networkReceived));
+            writer.write(String.format("<tr><td>Average Network Sent</td><td>%.2f/s</td></tr>\n",
+                analysis.averageMetrics.networkSent));
+            writer.write("</table>\n");
+            
+            writer.write("</body></html>");
+        }
+    }
+
+    // Export metrics to time series format for visualization
+    public void exportTimeSeriesData(List<ServerMetrics> metrics, String fileName) 
+                                   throws IOException {
+        try (FileWriter writer = new FileWriter(fileName)) {
+            JSONArray timeSeriesData = new JSONArray();
+            
+            for (ServerMetrics metric : metrics) {
+                JSONObject dataPoint = new JSONObject();
+                dataPoint.put("timestamp", 
+                    metric.timestamp.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli());
+                dataPoint.put("cpuUsage", metric.cpuUsage);
+                dataPoint.put("memoryUsed", metric.memoryUsed);
+                dataPoint.put("memoryFree", metric.memoryFree);
+                dataPoint.put("responseTime", metric.responseTime);
+                dataPoint.put("networkTotal", metric.networkReceived + metric.networkSent);
+                timeSeriesData.put(dataPoint);
+            }
+            
+            writer.write(timeSeriesData.toString(2));
+        }
+    }
+
+    // Calculate trend analysis
+    public Map<String, Double> calculateTrends(List<ServerMetrics> metrics) {
+        Map<String, Double> trends = new HashMap<>();
+        
+        if (metrics.size() < 2) {
+            return trends;
+        }
+
+        // Calculate slopes for different metrics
+        double[] times = new double[metrics.size()];
+        double[] cpuValues = new double[metrics.size()];
+        double[] memoryValues = new double[metrics.size()];
+        double[] responseValues = new double[metrics.size()];
+        
+        LocalDateTime startTime = metrics.get(0).timestamp;
+        
+        for (int i = 0; i < metrics.size(); i++) {
+            ServerMetrics metric = metrics.get(i);
+            times[i] = ChronoUnit.MINUTES.between(startTime, metric.timestamp);
+            cpuValues[i] = metric.cpuUsage;
+            memoryValues[i] = metric.memoryUsed;
+            responseValues[i] = metric.responseTime;
+        }
+        
+        trends.put("cpuTrend", calculateSlope(times, cpuValues));
+        trends.put("memoryTrend", calculateSlope(times, memoryValues));
+        trends.put("responseTrend", calculateSlope(times, responseValues));
+        
+        return trends;
+    }
+
+    // Helper method to calculate slope (trend)
+    private double calculateSlope(double[] x, double[] y) {
+        double n = x.length;
+        double sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+        
+        for (int i = 0; i < n; i++) {
+            sumX += x[i];
+            sumY += y[i];
+            sumXY += x[i] * y[i];
+            sumX2 += x[i] * x[i];
+        }
+        
+        return (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+    }
+
+    // Generate performance recommendations
+    public List<String> generateRecommendations(PerformanceAnalysis analysis) {
+        List<String> recommendations = new ArrayList<>();
+        
+        // CPU recommendations
+        if (analysis.averageMetrics.cpuUsage > DefaultThresholds.CPU_WARNING) {
+            recommendations.add("Consider scaling up CPU resources or optimizing CPU-intensive operations.");
+            recommendations.add("Review and optimize background processes and scheduled tasks.");
+        }
+        
+        // Memory recommendations
+        double avgMemoryUsage = (analysis.averageMetrics.memoryUsed / 
+            (analysis.averageMetrics.memoryUsed + analysis.averageMetrics.memoryFree)) * 100;
+        if (avgMemoryUsage > DefaultThresholds.MEMORY_WARNING) {
+            recommendations.add("Investigate memory leaks and optimize memory usage.");
+            recommendations.add("Consider increasing heap size or adding more memory.");
+        }
+        
+        // Response time recommendations
+        if (analysis.averageMetrics.responseTime > DefaultThresholds.RESPONSE_TIME_WARNING) {
+            recommendations.add("Optimize database queries and implement caching where appropriate.");
+            recommendations.add("Review and optimize slow transactions and API calls.");
+        }
+        
+        // Anomaly-based recommendations
+        if (!analysis.anomalies.isEmpty()) {
+            recommendations.add("Review system during detected anomaly periods for potential issues.");
+            recommendations.add("Consider implementing auto-scaling based on detected peak usage patterns.");
+        }
+        
+        return recommendations;
+    }
+
+    // Main method to demonstrate usage
+    public static void main(String[] args) {
+        try {
+            AppDynamicsPerformanceMonitor monitor = new AppDynamicsPerformanceMonitor(
+                "https://your-controller.example.com:8090",
+                "username",
+                "password",
+                "account-name"
+            );
+
+            // Define time range for analysis
+            LocalDateTime endTime = LocalDateTime.now();
+            LocalDateTime startTime = endTime.minusDays(1);
+
+            // Fetch metrics
+            List<ServerMetrics> metrics = monitor.getHourlyServerMetrics(
+                123, // applicationId
+                "MyAppTier",
+                startTime,
+                endTime
+            );
+
+            // Perform comprehensive analysis
+            PerformanceAnalysis analysis = monitor.analyzePerformance(metrics);
+
+            // Generate reports
+            monitor.exportAnalysisReport(analysis, "performance_report.html");
+            monitor.exportTimeSeriesData(metrics, "time_series_data.json");
+
+            // Calculate trends
+            Map<String, Double> trends = monitor.calculateTrends(metrics);
+
+            // Generate recommendations
+            List<String> recommendations = monitor.generateRecommendations(analysis);
+
+            // Print summary to console
+            System.out.println("Performance Analysis Summary:");
+            System.out.println("----------------------------");
+            System.out.printf("Average CPU Usage: %.2f%%\n", analysis.averageMetrics.cpuUsage);
+            System.out.printf("Average Response Time: %.2f ms\n", 
+                analysis.averageMetrics.responseTime);
+            System.out.printf("Number of Alerts: %d\n", analysis.alerts.size());
+            System.out.printf("Number of Anomalies: %d\n", analysis.anomalies.size());
+            System.out.println("\nRecommendations:");
+            recommendations.forEach(rec -> System.out.println("- " + rec));
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
