@@ -1,3 +1,106 @@
+import javax.net.ssl.*;
+import java.security.cert.X509Certificate;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
+import java.util.*;
+import java.io.*;
+import java.text.SimpleDateFormat;
+
+public class AppDynamicsPerformanceMonitor {
+    private final String controllerUrl;
+    private final String username;
+    private final String password;
+    private final String accountName;
+    private final HttpClient httpClient;
+
+    // Constructor with SSL handling options
+    public AppDynamicsPerformanceMonitor(String controllerUrl, String username, 
+                                       String password, String accountName, 
+                                       boolean trustAllCertificates) 
+                                       throws Exception {
+        this.controllerUrl = controllerUrl;
+        this.username = username;
+        this.password = password;
+        this.accountName = accountName;
+
+        if (trustAllCertificates) {
+            // Create a trust manager that trusts all certificates
+            TrustManager[] trustAllCerts = new TrustManager[]{
+                new X509TrustManager() {
+                    public X509Certificate[] getAcceptedIssuers() {
+                        return null;
+                    }
+                    public void checkClientTrusted(X509Certificate[] certs, String authType) {
+                    }
+                    public void checkServerTrusted(X509Certificate[] certs, String authType) {
+                    }
+                }
+            };
+
+            // Create SSL context that trusts all certificates
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(null, trustAllCerts, new java.security.SecureRandom());
+
+            // Create the HTTP client with custom SSL context
+            this.httpClient = HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_2)
+                .sslContext(sslContext)
+                .sslParameters(sslContext.getDefaultSSLParameters())
+                .build();
+        } else {
+            // Create default HTTP client
+            this.httpClient = HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_2)
+                .build();
+        }
+    }
+
+    // Alternative constructor for default SSL handling
+    public AppDynamicsPerformanceMonitor(String controllerUrl, String username, 
+                                       String password, String accountName) {
+        this.controllerUrl = controllerUrl;
+        this.username = username;
+        this.password = password;
+        this.accountName = accountName;
+        this.httpClient = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_2)
+            .build();
+    }
+
+    // Method to create a client that ignores hostname verification
+    public static HttpClient createTrustAllClient() throws Exception {
+        SSLContext sslContext = SSLContext.getInstance("TLS");
+        sslContext.init(null, new TrustManager[]{
+            new X509TrustManager() {
+                public X509Certificate[] getAcceptedIssuers() { return null; }
+                public void checkClientTrusted(X509Certificate[] certs, String authType) { }
+                public void checkServerTrusted(X509Certificate[] certs, String authType) { }
+            }
+        }, new java.security.SecureRandom());
+
+        return HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_2)
+            .sslContext(sslContext)
+            .hostnameVerifier((hostname, session) -> true)
+            .build();
+    }
+
+    // Rest of the class implementation remains the same...
+    // ... (previous methods)
+}
+
+
+
+
+
+
+
+
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
