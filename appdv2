@@ -1,0 +1,320 @@
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
+import java.util.*;
+import java.io.*;
+import java.text.SimpleDateFormat;
+
+public class AppDynamicsPerformanceMonitor {
+    private final String controllerUrl;
+    private final String username;
+    private final String password;
+    private final String accountName;
+    private final HttpClient httpClient;
+
+    // Custom simple JSON parser
+    static class JsonParser {
+        public static Map<String, Object> parseObject(String json) {
+            Map<String, Object> result = new HashMap<>();
+            json = json.trim();
+            if (json.startsWith("{") && json.endsWith("}")) {
+                json = json.substring(1, json.length() - 1);
+                String[] pairs = json.split(",");
+                for (String pair : pairs) {
+                    String[] keyValue = pair.split(":");
+                    if (keyValue.length == 2) {
+                        String key = keyValue[0].trim().replace("\"", "");
+                        String value = keyValue[1].trim();
+                        if (value.startsWith("\"") && value.endsWith("\"")) {
+                            result.put(key, value.substring(1, value.length() - 1));
+                        } else {
+                            try {
+                                result.put(key, Double.parseDouble(value));
+                            } catch (NumberFormatException e) {
+                                result.put(key, value);
+                            }
+                        }
+                    }
+                }
+            }
+            return result;
+        }
+
+        public static List<Map<String, Object>> parseArray(String json) {
+            List<Map<String, Object>> result = new ArrayList<>();
+            json = json.trim();
+            if (json.startsWith("[") && json.endsWith("]")) {
+                json = json.substring(1, json.length() - 1);
+                String[] objects = json.split("},\\s*\\{");
+                for (String obj : objects) {
+                    if (!obj.startsWith("{")) obj = "{" + obj;
+                    if (!obj.endsWith("}")) obj = obj + "}";
+                    result.add(parseObject(obj));
+                }
+            }
+            return result;
+        }
+    }
+
+    // Default thresholds for alerts
+    private static final class DefaultThresholds {
+        static final double CPU_WARNING = 70.0;
+        static final double CPU_CRITICAL = 85.0;
+        static final double MEMORY_WARNING = 75.0;
+        static final double MEMORY_CRITICAL = 90.0;
+        static final double RESPONSE_TIME_WARNING = 1000.0; // ms
+        static final double RESPONSE_TIME_CRITICAL = 2000.0; // ms
+    }
+
+    public static class ServerMetrics {
+        public final double cpuUsage;
+        public final double memoryUsed;
+        public final double memoryFree;
+        public final double diskIOReads;
+        public final double diskIOWrites;
+        public final double networkReceived;
+        public final double networkSent;
+        public final int activeThreads;
+        public final double responseTime;
+        public final LocalDateTime timestamp;
+
+        public ServerMetrics(Map<String, Object> metrics, LocalDateTime timestamp) {
+            this.cpuUsage = getDoubleValue(metrics, "cpuUsage");
+            this.memoryUsed = getDoubleValue(metrics, "memoryUsed");
+            this.memoryFree = getDoubleValue(metrics, "memoryFree");
+            this.diskIOReads = getDoubleValue(metrics, "diskReads");
+            this.diskIOWrites = getDoubleValue(metrics, "diskWrites");
+            this.networkReceived = getDoubleValue(metrics, "networkReceived");
+            this.networkSent = getDoubleValue(metrics, "networkSent");
+            this.activeThreads = (int) getDoubleValue(metrics, "activeThreads");
+            this.responseTime = getDoubleValue(metrics, "responseTime");
+            this.timestamp = timestamp;
+        }
+
+        private double getDoubleValue(Map<String, Object> metrics, String key) {
+            Object value = metrics.get(key);
+            if (value instanceof Number) {
+                return ((Number) value).doubleValue();
+            }
+            return 0.0;
+        }
+    }
+
+    public static class PerformanceAlert {
+        public final String metric;
+        public final double value;
+        public final String severity;
+        public final String message;
+        public final LocalDateTime timestamp;
+
+        public PerformanceAlert(String metric, double value, String severity, 
+                              String message, LocalDateTime timestamp) {
+            this.metric = metric;
+            this.value = value;
+            this.severity = severity;
+            this.message = message;
+            this.timestamp = timestamp;
+        }
+    }
+
+    public AppDynamicsPerformanceMonitor(String controllerUrl, String username, 
+                                       String password, String accountName) {
+        this.controllerUrl = controllerUrl;
+        this.username = username;
+        this.password = password;
+        this.accountName = accountName;
+        this.httpClient = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_2)
+            .build();
+    }
+
+    private String getAuthHeader() {
+        String auth = username + "@" + accountName + ":" + password;
+        return "Basic " + Base64.getEncoder().encodeToString(auth.getBytes());
+    }
+
+    // Fetch server metrics
+    public List<ServerMetrics> getHourlyServerMetrics(int applicationId, String tierName, 
+                                                    LocalDateTime startTime, LocalDateTime endTime) 
+                                                    throws Exception {
+        String endpoint = String.format("%s/controller/rest/applications/%d/metric-data", 
+                                      controllerUrl, applicationId);
+        
+        String[] metricPaths = {
+            "Server|Component:" + tierName + "|JVM|CPU|%Busy",
+            "Server|Component:" + tierName + "|JVM|Memory|Heap|Used (MB)",
+            "Server|Component:" + tierName + "|JVM|Memory|Heap|Free (MB)",
+            "Server|Component:" + tierName + "|JVM|Garbage Collection|GC Time Spent Per Min (ms)",
+            "Server|Component:" + tierName + "|Disks|Reads/sec",
+            "Server|Component:" + tierName + "|Disks|Writes/sec",
+            "Server|Component:" + tierName + "|Network|Incoming packets/sec",
+            "Server|Component:" + tierName + "|Network|Outgoing packets/sec",
+            "Server|Component:" + tierName + "|JVM|Threads|Current No. of Threads",
+            "Server|Component:" + tierName + "|Average Response Time (ms)"
+        };
+
+        List<ServerMetrics> hourlyMetrics = new ArrayList<>();
+        
+        for (LocalDateTime time = startTime; time.isBefore(endTime); time = time.plusHours(1)) {
+            long startTimeMillis = time.atZone(ZoneId.systemDefault())
+                                     .toInstant().toEpochMilli();
+            long endTimeMillis = time.plusHours(1).atZone(ZoneId.systemDefault())
+                                   .toInstant().toEpochMilli();
+
+            Map<String, Object> metricsData = new HashMap<>();
+            
+            for (String metricPath : metricPaths) {
+                String url = endpoint + "?metric-path=" + 
+                            metricPath + "&time-range-type=BETWEEN_TIMES" +
+                            "&start-time=" + startTimeMillis + 
+                            "&end-time=" + endTimeMillis + 
+                            "&rollup=true";
+
+                HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("Authorization", getAuthHeader())
+                    .header("Accept", "application/json")
+                    .GET()
+                    .build();
+
+                HttpResponse<String> response = httpClient.send(request, 
+                    HttpResponse.BodyHandlers.ofString());
+                
+                List<Map<String, Object>> metricsArray = JsonParser.parseArray(response.body());
+                
+                if (!metricsArray.isEmpty()) {
+                    Map<String, Object> metricValues = metricsArray.get(0);
+                    String metricName = metricPath.substring(metricPath.lastIndexOf("|") + 1)
+                                                .replace(" ", "")
+                                                .toLowerCase();
+                    
+                    List<Map<String, Object>> values = JsonParser.parseArray(
+                        metricValues.get("metricValues").toString());
+                    if (!values.isEmpty()) {
+                        metricsData.put(metricName, 
+                            values.get(0).getOrDefault("value", 0.0));
+                    }
+                }
+            }
+            
+            hourlyMetrics.add(new ServerMetrics(metricsData, time));
+        }
+        
+        return hourlyMetrics;
+    }
+
+    // Export metrics to CSV
+    public void exportMetricsToCSV(List<ServerMetrics> metrics, String fileName) 
+                                  throws IOException {
+        try (PrintWriter writer = new PrintWriter(new FileWriter(fileName))) {
+            // Write header
+            writer.println("Timestamp,CPU Usage (%),Memory Used (MB),Memory Free (MB)," +
+                         "Disk IO Reads/s,Disk IO Writes/s,Network Received/s," +
+                         "Network Sent/s,Active Threads,Response Time (ms)");
+            
+            // Write data
+            SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+            for (ServerMetrics metric : metrics) {
+                writer.printf("%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%.2f%n",
+                    dateFormat.format(Date.from(metric.timestamp
+                        .atZone(ZoneId.systemDefault()).toInstant())),
+                    metric.cpuUsage,
+                    metric.memoryUsed,
+                    metric.memoryFree,
+                    metric.diskIOReads,
+                    metric.diskIOWrites,
+                    metric.networkReceived,
+                    metric.networkSent,
+                    metric.activeThreads,
+                    metric.responseTime
+                );
+            }
+        }
+    }
+
+    // Calculate trends
+    public Map<String, Double> calculateTrends(List<ServerMetrics> metrics) {
+        Map<String, Double> trends = new HashMap<>();
+        
+        if (metrics.size() < 2) {
+            return trends;
+        }
+
+        double[] times = new double[metrics.size()];
+        double[] cpuValues = new double[metrics.size()];
+        double[] memoryValues = new double[metrics.size()];
+        double[] responseValues = new double[metrics.size()];
+        
+        LocalDateTime startTime = metrics.get(0).timestamp;
+        
+        for (int i = 0; i < metrics.size(); i++) {
+            ServerMetrics metric = metrics.get(i);
+            times[i] = ChronoUnit.MINUTES.between(startTime, metric.timestamp);
+            cpuValues[i] = metric.cpuUsage;
+            memoryValues[i] = metric.memoryUsed;
+            responseValues[i] = metric.responseTime;
+        }
+        
+        trends.put("cpuTrend", calculateSlope(times, cpuValues));
+        trends.put("memoryTrend", calculateSlope(times, memoryValues));
+        trends.put("responseTrend", calculateSlope(times, responseValues));
+        
+        return trends;
+    }
+
+    private double calculateSlope(double[] x, double[] y) {
+        double n = x.length;
+        double sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+        
+        for (int i = 0; i < n; i++) {
+            sumX += x[i];
+            sumY += y[i];
+            sumXY += x[i] * y[i];
+            sumX2 += x[i] * x[i];
+        }
+        
+        return (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+    }
+
+    // Example usage
+    public static void main(String[] args) {
+        try {
+            AppDynamicsPerformanceMonitor monitor = new AppDynamicsPerformanceMonitor(
+                "https://your-controller.example.com:8090",
+                "username",
+                "password",
+                "account-name"
+            );
+
+            LocalDateTime endTime = LocalDateTime.now();
+            LocalDateTime startTime = endTime.minusHours(1);
+
+            List<ServerMetrics> metrics = monitor.getHourlyServerMetrics(
+                123, // applicationId
+                "MyAppTier",
+                startTime,
+                endTime
+            );
+
+            // Export to CSV
+            monitor.exportMetricsToCSV(metrics, "performance_metrics.csv");
+
+            // Calculate trends
+            Map<String, Double> trends = monitor.calculateTrends(metrics);
+
+            // Print results
+            System.out.println("Performance Analysis Results:");
+            System.out.println("----------------------------");
+            System.out.printf("CPU Usage Trend: %.2f/hour%n", trends.get("cpuTrend"));
+            System.out.printf("Memory Usage Trend: %.2f MB/hour%n", trends.get("memoryTrend"));
+            System.out.printf("Response Time Trend: %.2f ms/hour%n", trends.get("responseTrend"));
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
