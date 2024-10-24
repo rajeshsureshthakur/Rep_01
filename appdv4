@@ -1,0 +1,200 @@
+import javax.net.ssl.*;
+import java.security.cert.X509Certificate;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
+import java.util.*;
+import java.io.*;
+import java.text.SimpleDateFormat;
+import java.security.SecureRandom;
+
+public class AppDynamicsPerformanceMonitor {
+    private final String controllerUrl;
+    private final String username;
+    private final String password;
+    private final String accountName;
+    private final HttpClient httpClient;
+
+    // Default thresholds for alerts
+    private static final class DefaultThresholds {
+        static final double CPU_WARNING = 70.0;
+        static final double CPU_CRITICAL = 85.0;
+        static final double MEMORY_WARNING = 75.0;
+        static final double MEMORY_CRITICAL = 90.0;
+        static final double RESPONSE_TIME_WARNING = 1000.0; // ms
+        static final double RESPONSE_TIME_CRITICAL = 2000.0; // ms
+    }
+
+    public AppDynamicsPerformanceMonitor(String controllerUrl, String username, 
+                                       String password, String accountName) 
+                                       throws Exception {
+        this.controllerUrl = controllerUrl;
+        this.username = username;
+        this.password = password;
+        this.accountName = accountName;
+
+        // Create a trust manager that trusts all certificates
+        TrustManager[] trustAllCerts = new TrustManager[]{
+            new X509TrustManager() {
+                public X509Certificate[] getAcceptedIssuers() {
+                    return null;
+                }
+                public void checkClientTrusted(X509Certificate[] certs, String authType) {
+                }
+                public void checkServerTrusted(X509Certificate[] certs, String authType) {
+                }
+            }
+        };
+
+        // Initialize SSL context with trust all certificates
+        SSLContext sslContext = SSLContext.getInstance("TLS");
+        sslContext.init(null, trustAllCerts, new SecureRandom());
+
+        // Create SSL parameters that disable hostname verification
+        SSLParameters sslParameters = new SSLParameters();
+        sslParameters.setEndpointIdentificationAlgorithm(null);
+
+        // Build HTTP client
+        this.httpClient = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_2)
+            .sslContext(sslContext)
+            .sslParameters(sslParameters)
+            .build();
+    }
+
+    // Rest of your monitoring code remains the same...
+    // ... (include all the previous monitoring methods)
+
+    public static class ServerMetrics {
+        public final double cpuUsage;
+        public final double memoryUsed;
+        public final double memoryFree;
+        public final double diskIOReads;
+        public final double diskIOWrites;
+        public final double networkReceived;
+        public final double networkSent;
+        public final int activeThreads;
+        public final double responseTime;
+        public final double gcTime;
+        public final int errorCount;
+        public final double throughput;
+        public final LocalDateTime timestamp;
+
+        public ServerMetrics(Map<String, Object> metrics, LocalDateTime timestamp) {
+            this.cpuUsage = getDoubleValue(metrics, "cpuUsage");
+            this.memoryUsed = getDoubleValue(metrics, "memoryUsed");
+            this.memoryFree = getDoubleValue(metrics, "memoryFree");
+            this.diskIOReads = getDoubleValue(metrics, "diskReads");
+            this.diskIOWrites = getDoubleValue(metrics, "diskWrites");
+            this.networkReceived = getDoubleValue(metrics, "networkReceived");
+            this.networkSent = getDoubleValue(metrics, "networkSent");
+            this.activeThreads = (int) getDoubleValue(metrics, "activeThreads");
+            this.responseTime = getDoubleValue(metrics, "responseTime");
+            this.gcTime = getDoubleValue(metrics, "gcTime");
+            this.errorCount = (int) getDoubleValue(metrics, "errorCount");
+            this.throughput = getDoubleValue(metrics, "throughput");
+            this.timestamp = timestamp;
+        }
+
+        private double getDoubleValue(Map<String, Object> metrics, String key) {
+            Object value = metrics.get(key);
+            if (value == null) return 0.0;
+            if (value instanceof Number) {
+                return ((Number) value).doubleValue();
+            }
+            try {
+                return Double.parseDouble(value.toString());
+            } catch (NumberFormatException e) {
+                return 0.0;
+            }
+        }
+    }
+
+    // Test the connection
+    public boolean testConnection() {
+        try {
+            String url = controllerUrl + "/controller/rest/applications";
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Authorization", getAuthHeader())
+                .header("Accept", "application/json")
+                .GET()
+                .build();
+
+            HttpResponse<String> response = httpClient.send(request, 
+                HttpResponse.BodyHandlers.ofString());
+            
+            System.out.println("Response status code: " + response.statusCode());
+            System.out.println("Response body: " + response.body());
+            
+            return response.statusCode() == 200;
+        } catch (Exception e) {
+            System.err.println("Connection test failed: " + e.getMessage());
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    private String getAuthHeader() {
+        String auth = username + "@" + accountName + ":" + password;
+        return "Basic " + Base64.getEncoder().encodeToString(auth.getBytes());
+    }
+
+    // Example usage
+    public static void main(String[] args) {
+        try {
+            // Optional: Enable SSL debugging
+            // System.setProperty("javax.net.debug", "ssl");
+
+            AppDynamicsPerformanceMonitor monitor = new AppDynamicsPerformanceMonitor(
+                "https://your-controller.example.com:8090",
+                "username",
+                "password",
+                "account-name"
+            );
+
+            if (monitor.testConnection()) {
+                System.out.println("Successfully connected to AppDynamics controller");
+                
+                // Get metrics for the last hour
+                LocalDateTime endTime = LocalDateTime.now();
+                LocalDateTime startTime = endTime.minusHours(1);
+
+                List<ServerMetrics> metrics = monitor.getHourlyServerMetrics(
+                    123, // applicationId
+                    "MyAppTier",
+                    startTime,
+                    endTime
+                );
+
+                // Print summary of metrics
+                if (!metrics.isEmpty()) {
+                    ServerMetrics latest = metrics.get(metrics.size() - 1);
+                    System.out.println("\nLatest Metrics:");
+                    System.out.printf("CPU Usage: %.2f%%%n", latest.cpuUsage);
+                    System.out.printf("Memory Used: %.2f MB%n", latest.memoryUsed);
+                    System.out.printf("Response Time: %.2f ms%n", latest.responseTime);
+                    System.out.printf("Error Count: %d%n", latest.errorCount);
+                    System.out.printf("Throughput: %.2f calls/min%n", latest.throughput);
+                }
+            } else {
+                System.out.println("Failed to connect to AppDynamics controller");
+            }
+
+        } catch (Exception e) {
+            System.err.println("Error: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    // Method to fetch server metrics (implementation from previous version)
+    public List<ServerMetrics> getHourlyServerMetrics(int applicationId, String tierName, 
+                                                    LocalDateTime startTime, LocalDateTime endTime) 
+                                                    throws Exception {
+        // ... (Keep the implementation from the previous version)
+    }
+}
