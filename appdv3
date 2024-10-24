@@ -1,0 +1,294 @@
+import javax.net.ssl.*;
+import java.security.cert.X509Certificate;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
+import java.util.*;
+import java.io.*;
+import java.text.SimpleDateFormat;
+import java.security.SecureRandom;
+
+public class AppDynamicsPerformanceMonitor {
+    private final String controllerUrl;
+    private final String username;
+    private final String password;
+    private final String accountName;
+    private final HttpClient httpClient;
+
+    // Default thresholds for alerts
+    private static final class DefaultThresholds {
+        static final double CPU_WARNING = 70.0;
+        static final double CPU_CRITICAL = 85.0;
+        static final double MEMORY_WARNING = 75.0;
+        static final double MEMORY_CRITICAL = 90.0;
+        static final double RESPONSE_TIME_WARNING = 1000.0; // ms
+        static final double RESPONSE_TIME_CRITICAL = 2000.0; // ms
+    }
+
+    public static class ServerMetrics {
+        public final double cpuUsage;
+        public final double memoryUsed;
+        public final double memoryFree;
+        public final double diskIOReads;
+        public final double diskIOWrites;
+        public final double networkReceived;
+        public final double networkSent;
+        public final int activeThreads;
+        public final double responseTime;
+        public final double gcTime;
+        public final int errorCount;
+        public final double throughput;
+        public final LocalDateTime timestamp;
+
+        public ServerMetrics(Map<String, Object> metrics, LocalDateTime timestamp) {
+            this.cpuUsage = getDoubleValue(metrics, "cpuUsage");
+            this.memoryUsed = getDoubleValue(metrics, "memoryUsed");
+            this.memoryFree = getDoubleValue(metrics, "memoryFree");
+            this.diskIOReads = getDoubleValue(metrics, "diskReads");
+            this.diskIOWrites = getDoubleValue(metrics, "diskWrites");
+            this.networkReceived = getDoubleValue(metrics, "networkReceived");
+            this.networkSent = getDoubleValue(metrics, "networkSent");
+            this.activeThreads = (int) getDoubleValue(metrics, "activeThreads");
+            this.responseTime = getDoubleValue(metrics, "responseTime");
+            this.gcTime = getDoubleValue(metrics, "gcTime");
+            this.errorCount = (int) getDoubleValue(metrics, "errorCount");
+            this.throughput = getDoubleValue(metrics, "throughput");
+            this.timestamp = timestamp;
+        }
+
+        private double getDoubleValue(Map<String, Object> metrics, String key) {
+            Object value = metrics.get(key);
+            if (value == null) return 0.0;
+            if (value instanceof Number) {
+                return ((Number) value).doubleValue();
+            }
+            try {
+                return Double.parseDouble(value.toString());
+            } catch (NumberFormatException e) {
+                return 0.0;
+            }
+        }
+    }
+
+    // Constructor with SSL handling
+    public AppDynamicsPerformanceMonitor(String controllerUrl, String username, 
+                                       String password, String accountName) 
+                                       throws Exception {
+        this.controllerUrl = controllerUrl;
+        this.username = username;
+        this.password = password;
+        this.accountName = accountName;
+
+        // Create custom SSL context with default trust managers
+        SSLContext sslContext = SSLContext.getInstance("TLS");
+        TrustManagerFactory tmf = TrustManagerFactory.getInstance(
+            TrustManagerFactory.getDefaultAlgorithm());
+        tmf.init((KeyStore) null);
+        
+        X509TrustManager defaultTm = (X509TrustManager) tmf.getTrustManagers()[0];
+        X509TrustManager customTm = new X509TrustManager() {
+            @Override
+            public void checkClientTrusted(X509Certificate[] chain, String authType) 
+                throws java.security.cert.CertificateException {
+                defaultTm.checkClientTrusted(chain, authType);
+            }
+
+            @Override
+            public void checkServerTrusted(X509Certificate[] chain, String authType) 
+                throws java.security.cert.CertificateException {
+                defaultTm.checkServerTrusted(chain, authType);
+            }
+
+            @Override
+            public X509Certificate[] getAcceptedIssuers() {
+                return defaultTm.getAcceptedIssuers();
+            }
+        };
+
+        sslContext.init(null, new TrustManager[]{customTm}, new SecureRandom());
+        
+        SSLParameters sslParameters = new SSLParameters();
+        sslParameters.setEndpointIdentificationAlgorithm(null);
+
+        this.httpClient = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_2)
+            .sslContext(sslContext)
+            .sslParameters(sslParameters)
+            .build();
+    }
+
+    // Fetch comprehensive server metrics
+    public List<ServerMetrics> getHourlyServerMetrics(int applicationId, String tierName, 
+                                                    LocalDateTime startTime, LocalDateTime endTime) 
+                                                    throws Exception {
+        String endpoint = String.format("%s/controller/rest/applications/%d/metric-data", 
+                                      controllerUrl, applicationId);
+        
+        // Expanded list of metric paths
+        String[] metricPaths = {
+            "Server|Component:" + tierName + "|JVM|CPU|%Busy",
+            "Server|Component:" + tierName + "|JVM|Memory|Heap|Used (MB)",
+            "Server|Component:" + tierName + "|JVM|Memory|Heap|Free (MB)",
+            "Server|Component:" + tierName + "|JVM|Memory|Non-Heap|Used (MB)",
+            "Server|Component:" + tierName + "|JVM|Garbage Collection|GC Time Spent Per Min (ms)",
+            "Server|Component:" + tierName + "|Disks|Reads/sec",
+            "Server|Component:" + tierName + "|Disks|Writes/sec",
+            "Server|Component:" + tierName + "|Network|Incoming packets/sec",
+            "Server|Component:" + tierName + "|Network|Outgoing packets/sec",
+            "Server|Component:" + tierName + "|JVM|Threads|Current No. of Threads",
+            "Server|Component:" + tierName + "|Average Response Time (ms)",
+            "Server|Component:" + tierName + "|Calls per Minute",
+            "Server|Component:" + tierName + "|Errors per Minute",
+            "Server|Component:" + tierName + "|JVM|Classes|Loaded",
+            "Server|Component:" + tierName + "|JVM|Memory|Heap|Committed (MB)",
+            "Server|Component:" + tierName + "|JVM|Memory|Heap|Max Available (MB)"
+        };
+
+        List<ServerMetrics> hourlyMetrics = new ArrayList<>();
+        
+        for (LocalDateTime time = startTime; time.isBefore(endTime); time = time.plusHours(1)) {
+            long startTimeMillis = time.atZone(ZoneId.systemDefault())
+                                     .toInstant().toEpochMilli();
+            long endTimeMillis = time.plusHours(1).atZone(ZoneId.systemDefault())
+                                   .toInstant().toEpochMilli();
+
+            Map<String, Object> metricsData = new HashMap<>();
+            
+            for (String metricPath : metricPaths) {
+                String url = endpoint + "?metric-path=" + 
+                            metricPath + "&time-range-type=BETWEEN_TIMES" +
+                            "&start-time=" + startTimeMillis + 
+                            "&end-time=" + endTimeMillis + 
+                            "&rollup=true";
+
+                HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("Authorization", getAuthHeader())
+                    .header("Accept", "application/json")
+                    .GET()
+                    .build();
+
+                HttpResponse<String> response = httpClient.send(request, 
+                    HttpResponse.BodyHandlers.ofString());
+                
+                if (response.statusCode() == 200) {
+                    parseMetricResponse(response.body(), metricPath, metricsData);
+                }
+            }
+            
+            hourlyMetrics.add(new ServerMetrics(metricsData, time));
+        }
+        
+        return hourlyMetrics;
+    }
+
+    // Parse metric response
+    private void parseMetricResponse(String response, String metricPath, 
+                                   Map<String, Object> metricsData) {
+        try {
+            // Simple parsing of the response
+            if (response.contains("\"values\"")) {
+                String valueStr = response.split("\"value\":")[1];
+                valueStr = valueStr.split(",")[0];
+                double value = Double.parseDouble(valueStr);
+                
+                String metricName = metricPath.substring(metricPath.lastIndexOf("|") + 1)
+                                            .replace(" ", "")
+                                            .replace("(", "")
+                                            .replace(")", "")
+                                            .replace("%", "")
+                                            .toLowerCase();
+                
+                metricsData.put(metricName, value);
+            }
+        } catch (Exception e) {
+            System.err.println("Error parsing metric response for " + metricPath + ": " + e.getMessage());
+        }
+    }
+
+    // Export metrics to CSV
+    public void exportMetricsToCSV(List<ServerMetrics> metrics, String fileName) 
+                                  throws IOException {
+        try (PrintWriter writer = new PrintWriter(new FileWriter(fileName))) {
+            // Write header
+            writer.println("Timestamp,CPU Usage (%),Memory Used (MB),Memory Free (MB)," +
+                         "Disk IO Reads/s,Disk IO Writes/s,Network Received/s," +
+                         "Network Sent/s,Active Threads,Response Time (ms)," +
+                         "GC Time (ms),Error Count,Throughput");
+            
+            // Write data
+            SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+            for (ServerMetrics metric : metrics) {
+                writer.printf("%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%.2f,%.2f,%d,%.2f%n",
+                    dateFormat.format(Date.from(metric.timestamp
+                        .atZone(ZoneId.systemDefault()).toInstant())),
+                    metric.cpuUsage,
+                    metric.memoryUsed,
+                    metric.memoryFree,
+                    metric.diskIOReads,
+                    metric.diskIOWrites,
+                    metric.networkReceived,
+                    metric.networkSent,
+                    metric.activeThreads,
+                    metric.responseTime,
+                    metric.gcTime,
+                    metric.errorCount,
+                    metric.throughput
+                );
+            }
+        }
+    }
+
+    private String getAuthHeader() {
+        String auth = username + "@" + accountName + ":" + password;
+        return "Basic " + Base64.getEncoder().encodeToString(auth.getBytes());
+    }
+
+    // Example usage
+    public static void main(String[] args) {
+        try {
+            // Optional: Enable SSL debugging
+            // System.setProperty("javax.net.debug", "ssl");
+
+            AppDynamicsPerformanceMonitor monitor = new AppDynamicsPerformanceMonitor(
+                "https://your-controller.example.com:8090",
+                "username",
+                "password",
+                "account-name"
+            );
+
+            // Get metrics for the last hour
+            LocalDateTime endTime = LocalDateTime.now();
+            LocalDateTime startTime = endTime.minusHours(1);
+
+            List<ServerMetrics> metrics = monitor.getHourlyServerMetrics(
+                123, // applicationId
+                "MyAppTier",
+                startTime,
+                endTime
+            );
+
+            // Export metrics to CSV
+            monitor.exportMetricsToCSV(metrics, "performance_metrics.csv");
+
+            // Print summary
+            if (!metrics.isEmpty()) {
+                ServerMetrics latest = metrics.get(metrics.size() - 1);
+                System.out.println("\nLatest Metrics:");
+                System.out.printf("CPU Usage: %.2f%%%n", latest.cpuUsage);
+                System.out.printf("Memory Used: %.2f MB%n", latest.memoryUsed);
+                System.out.printf("Response Time: %.2f ms%n", latest.responseTime);
+                System.out.printf("Error Count: %d%n", latest.errorCount);
+                System.out.printf("Throughput: %.2f calls/min%n", latest.throughput);
+            }
+
+        } catch (Exception e) {
+            System.err.println("Error: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+}
