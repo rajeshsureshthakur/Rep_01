@@ -292,3 +292,92 @@ public class AppDynamicsPerformanceMonitor {
         }
     }
 }
+
+
+
+
+
+
+
+
+
+
+public AppDynamicsPerformanceMonitor(String controllerUrl, String username, 
+                                       String password, String accountName) 
+                                       throws Exception {
+        this.controllerUrl = controllerUrl;
+        this.username = username;
+        this.password = password;
+        this.accountName = accountName;
+
+        try {
+            // Get the system keystore path and password
+            String keystorePath = System.getProperty("javax.net.ssl.trustStore");
+            String keystorePass = System.getProperty("javax.net.ssl.trustStorePassword");
+
+            // If not set, use default values
+            if (keystorePath == null) {
+                keystorePath = System.getProperty("java.home") + 
+                             File.separator + "lib" + 
+                             File.separator + "security" + 
+                             File.separator + "cacerts";
+                keystorePass = "changeit"; // default password for cacerts
+            }
+
+            // Load the keystore
+            KeyStore keyStore = KeyStore.getInstance(KeyStore.getDefaultType());
+            try (FileInputStream fis = new FileInputStream(keystorePath)) {
+                keyStore.load(fis, keystorePass.toCharArray());
+            }
+
+            // Create and initialize the trust manager factory
+            TrustManagerFactory tmf = TrustManagerFactory.getInstance(
+                TrustManagerFactory.getDefaultAlgorithm());
+            tmf.init(keyStore);
+
+            // Create SSL context
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(null, tmf.getTrustManagers(), new SecureRandom());
+
+            // Create SSL parameters that disable hostname verification
+            SSLParameters sslParameters = new SSLParameters();
+            sslParameters.setEndpointIdentificationAlgorithm(null);
+
+            // Build HTTP client
+            this.httpClient = HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_2)
+                .sslContext(sslContext)
+                .sslParameters(sslParameters)
+                .build();
+
+        } catch (Exception e) {
+            System.err.println("Error initializing SSL context: " + e.getMessage());
+            // Fall back to trust all certificates
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(null, trustAllCerts(), new SecureRandom());
+            
+            SSLParameters sslParameters = new SSLParameters();
+            sslParameters.setEndpointIdentificationAlgorithm(null);
+
+            this.httpClient = HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_2)
+                .sslContext(sslContext)
+                .sslParameters(sslParameters)
+                .build();
+        }
+    }
+
+    // Helper method to create trust all certificates array
+    private TrustManager[] trustAllCerts() {
+        return new TrustManager[]{
+            new X509TrustManager() {
+                public X509Certificate[] getAcceptedIssuers() {
+                    return null;
+                }
+                public void checkClientTrusted(X509Certificate[] certs, String authType) {
+                }
+                public void checkServerTrusted(X509Certificate[] certs, String authType) {
+                }
+            }
+        };
+    }
