@@ -220,3 +220,23 @@ public class RestUIWidgetFetcher {
         }
     }
 }
+
+
+
+
+        if (!cookies.isEmpty()) {
+                // Extract just the cookie name=value pairs
+                List<String> cookieValues = new ArrayList<>();
+                for (String cookie : cookies) {
+                    String cookieValue = cookie.split(";")[0];
+                    cookieValues.add(cookieValue);
+                }
+                // Join all cookie values with semicolon and space
+                String cookieHeader = String.join("; ", cookieValues);
+                requestBuilder.header("Cookie", cookieHeader);
+                System.out.println("\nCookie header being sent: " + cookieHeader);
+            }
+
+            HttpRequest request = requestBuilder
+                .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
+                .build();
