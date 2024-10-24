@@ -1,0 +1,198 @@
+import javax.net.ssl.*;
+import java.security.cert.X509Certificate;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.*;
+import java.io.*;
+
+public class AppDynamicsMetricsLogger {
+    private final String controllerUrl;
+    private final String username;
+    private final String password;
+    private final String accountName;
+    private final HttpClient httpClient;
+
+    // Constructor remains the same...
+    public AppDynamicsMetricsLogger(String controllerUrl, String username, 
+                                  String password, String accountName) 
+                                  throws Exception {
+        // ... (previous constructor code)
+    }
+
+    // New method for sending POST requests
+    public void sendMetricsPost(String endpoint, String jsonPayload) throws Exception {
+        String url = controllerUrl + endpoint;
+        
+        System.out.println("\n========== AppDynamics POST Request ==========");
+        System.out.println("URL: " + url);
+        System.out.println("Payload: " + formatJson(jsonPayload));
+        System.out.println("==============================================\n");
+
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Authorization", getAuthHeader())
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
+                .build();
+
+            HttpResponse<String> response = httpClient.send(request, 
+                HttpResponse.BodyHandlers.ofString());
+
+            System.out.println("Response Status Code: " + response.statusCode());
+            System.out.println("Response Headers: " + response.headers().map());
+            System.out.println("Response Body: " + formatJson(response.body()));
+
+        } catch (Exception e) {
+            System.err.println("Error sending POST request: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    // Example method for creating a custom event
+    public void createCustomEvent(int applicationId, String summary, String details, 
+                                String severity) throws Exception {
+        String endpoint = "/controller/rest/applications/" + applicationId + "/events";
+        
+        // Create JSON payload
+        String jsonPayload = String.format("""
+            {
+                "summary": "%s",
+                "details": "%s",
+                "severity": "%s",
+                "eventType": "CUSTOM",
+                "timeStampInMillis": %d
+            }""", 
+            summary, details, severity, System.currentTimeMillis());
+
+        sendMetricsPost(endpoint, jsonPayload);
+    }
+
+    // Example method for creating a health rule
+    public void createHealthRule(int applicationId, String ruleName, 
+                               String metricPath, double threshold) throws Exception {
+        String endpoint = "/controller/rest/applications/" + applicationId + "/healthrules";
+        
+        // Create JSON payload for health rule
+        String jsonPayload = String.format("""
+            {
+                "name": "%s",
+                "enabled": true,
+                "useDataFromLastNMinutes": 30,
+                "waitTimeAfterViolation": 300,
+                "affects": {
+                    "affectedEntityType": "TIER_NODE_TRANSACTION_PERFORMANCE",
+                    "affectedEntities": {
+                        "tierOrNode": "APPLICATION"
+                    }
+                },
+                "evaluationCriteria": {
+                    "criticalCriteria": {
+                        "conditions": [{
+                            "name": "Condition 1",
+                            "evaluateToTrueOnNoData": false,
+                            "metricExpression": {
+                                "metricPath": "%s",
+                                "aggregatorType": "VALUE"
+                            },
+                            "operator": "GREATER_THAN",
+                            "value": %.2f
+                        }]
+                    }
+                }
+            }""", 
+            ruleName, metricPath, threshold);
+
+        sendMetricsPost(endpoint, jsonPayload);
+    }
+
+    // Example method for creating a custom metric
+    public void postCustomMetric(int applicationId, String metricPath, 
+                               double metricValue) throws Exception {
+        String endpoint = "/controller/rest/applications/" + applicationId + 
+                         "/metric-data";
+        
+        String jsonPayload = String.format("""
+            {
+                "metricPath": "Custom Metrics|%s",
+                "value": %.2f,
+                "timeStampInMillis": %d
+            }""", 
+            metricPath, metricValue, System.currentTimeMillis());
+
+        sendMetricsPost(endpoint, jsonPayload);
+    }
+
+    // Example method for creating an action
+    public void createAction(int applicationId, String actionName, 
+                           String actionType) throws Exception {
+        String endpoint = "/controller/rest/applications/" + applicationId + "/actions";
+        
+        String jsonPayload = String.format("""
+            {
+                "name": "%s",
+                "actionType": "%s",
+                "enabled": true,
+                "configuration": {
+                    "emailAddresses": "alerts@example.com",
+                    "customTemplateVariables": {}
+                }
+            }""", 
+            actionName, actionType);
+
+        sendMetricsPost(endpoint, jsonPayload);
+    }
+
+    // Example usage in main method
+    public static void main(String[] args) {
+        try {
+            AppDynamicsMetricsLogger logger = new AppDynamicsMetricsLogger(
+                "https://your-controller.example.com:8090",
+                "username",
+                "password",
+                "account-name"
+            );
+
+            // Example 1: Create a custom event
+            logger.createCustomEvent(
+                123,                        // applicationId
+                "Performance Alert",        // summary
+                "High CPU usage detected",  // details
+                "WARNING"                   // severity
+            );
+
+            // Example 2: Create a health rule
+            logger.createHealthRule(
+                123,                        // applicationId
+                "High CPU Usage Rule",      // ruleName
+                "Server|Component:*|CPU|%Busy", // metricPath
+                80.0                        // threshold
+            );
+
+            // Example 3: Post a custom metric
+            logger.postCustomMetric(
+                123,                        // applicationId
+                "MyMetrics|ResponseTime",   // metricPath
+                150.5                       // metricValue
+            );
+
+            // Example 4: Create an action
+            logger.createAction(
+                123,                        // applicationId
+                "Email Alert",              // actionName
+                "EMAIL"                     // actionType
+            );
+
+        } catch (Exception e) {
+            System.err.println("Error in main: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    // Utility methods (getAuthHeader, formatJson, etc.) remain the same...
+}
