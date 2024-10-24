@@ -1,0 +1,183 @@
+import javax.net.ssl.*;
+import java.security.cert.X509Certificate;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.*;
+import java.io.*;
+
+public class AppDynamicsMetricsLogger {
+    private final String controllerUrl;
+    private final String username;
+    private final String password;
+    private final String accountName;
+    private final HttpClient httpClient;
+
+    public AppDynamicsMetricsLogger(String controllerUrl, String username, 
+                                  String password, String accountName) 
+                                  throws Exception {
+        this.controllerUrl = controllerUrl;
+        this.username = username;
+        this.password = password;
+        this.accountName = accountName;
+
+        // SSL Configuration
+        TrustManager[] trustAllCerts = new TrustManager[]{
+            new X509TrustManager() {
+                public X509Certificate[] getAcceptedIssuers() { return null; }
+                public void checkClientTrusted(X509Certificate[] certs, String authType) { }
+                public void checkServerTrusted(X509Certificate[] certs, String authType) { }
+            }
+        };
+
+        SSLContext sslContext = SSLContext.getInstance("TLS");
+        sslContext.init(null, trustAllCerts, new SecureRandom());
+
+        SSLParameters sslParameters = new SSLParameters();
+        sslParameters.setEndpointIdentificationAlgorithm(null);
+
+        this.httpClient = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_2)
+            .sslContext(sslContext)
+            .sslParameters(sslParameters)
+            .build();
+    }
+
+    private String getAuthHeader() {
+        String auth = username + "@" + accountName + ":" + password;
+        return "Basic " + Base64.getEncoder().encodeToString(auth.getBytes());
+    }
+
+    public void logServerMetrics(int applicationId, String tierName, 
+                               LocalDateTime startTime, LocalDateTime endTime) 
+                               throws Exception {
+        System.out.println("\n========== AppDynamics Metrics Logger ==========");
+        System.out.println("Start Time: " + startTime.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
+        System.out.println("End Time: " + endTime.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
+        System.out.println("==============================================\n");
+
+        String baseEndpoint = String.format("%s/controller/rest/applications/%d/metric-data",
+                                          controllerUrl, applicationId);
+
+        // Define all metrics to fetch
+        Map<String, String> metricsToFetch = new LinkedHashMap<>();
+        metricsToFetch.put("CPU", 
+            "Server|Component:" + tierName + "|JVM|CPU|%Busy");
+        metricsToFetch.put("Memory Used", 
+            "Server|Component:" + tierName + "|JVM|Memory|Heap|Used (MB)");
+        metricsToFetch.put("Memory Free", 
+            "Server|Component:" + tierName + "|JVM|Memory|Heap|Free (MB)");
+        metricsToFetch.put("Garbage Collection", 
+            "Server|Component:" + tierName + "|JVM|Garbage Collection|GC Time Spent Per Min (ms)");
+        metricsToFetch.put("Response Time", 
+            "Server|Component:" + tierName + "|Average Response Time (ms)");
+        metricsToFetch.put("Calls per Minute", 
+            "Server|Component:" + tierName + "|Calls per Minute");
+        metricsToFetch.put("Errors per Minute", 
+            "Server|Component:" + tierName + "|Errors per Minute");
+        metricsToFetch.put("Thread Count", 
+            "Server|Component:" + tierName + "|JVM|Threads|Current No. of Threads");
+
+        long startTimeMillis = startTime.atZone(ZoneId.systemDefault())
+                                      .toInstant().toEpochMilli();
+        long endTimeMillis = endTime.atZone(ZoneId.systemDefault())
+                                   .toInstant().toEpochMilli();
+
+        for (Map.Entry<String, String> metric : metricsToFetch.entrySet()) {
+            String metricName = metric.getKey();
+            String metricPath = metric.getValue();
+
+            String url = baseEndpoint + 
+                        "?metric-path=" + metricPath +
+                        "&time-range-type=BETWEEN_TIMES" +
+                        "&start-time=" + startTimeMillis +
+                        "&end-time=" + endTimeMillis +
+                        "&rollup=true";
+
+            System.out.println("\n--- Fetching " + metricName + " ---");
+            System.out.println("URL: " + url);
+
+            try {
+                HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("Authorization", getAuthHeader())
+                    .header("Accept", "application/json")
+                    .GET()
+                    .build();
+
+                HttpResponse<String> response = httpClient.send(request, 
+                    HttpResponse.BodyHandlers.ofString());
+
+                System.out.println("Status Code: " + response.statusCode());
+                System.out.println("Response Headers: " + response.headers().map());
+                System.out.println("Response Body: " + formatJson(response.body()));
+
+            } catch (Exception e) {
+                System.err.println("Error fetching " + metricName + ": " + e.getMessage());
+                e.printStackTrace();
+            }
+        }
+    }
+
+    // Format JSON string for better readability
+    private String formatJson(String json) {
+        StringBuilder formatted = new StringBuilder();
+        int indent = 0;
+        boolean inQuotes = false;
+
+        for (char c : json.toCharArray()) {
+            switch (c) {
+                case '{':
+                case '[':
+                    formatted.append(c).append("\n").append("  ".repeat(++indent));
+                    break;
+                case '}':
+                case ']':
+                    formatted.append("\n").append("  ".repeat(--indent)).append(c);
+                    break;
+                case '"':
+                    inQuotes = !inQuotes;
+                    formatted.append(c);
+                    break;
+                case ',':
+                    formatted.append(c);
+                    if (!inQuotes) formatted.append("\n").append("  ".repeat(indent));
+                    break;
+                default:
+                    formatted.append(c);
+            }
+        }
+        return formatted.toString();
+    }
+
+    // Example usage
+    public static void main(String[] args) {
+        try {
+            AppDynamicsMetricsLogger logger = new AppDynamicsMetricsLogger(
+                "https://your-controller.example.com:8090",
+                "username",
+                "password",
+                "account-name"
+            );
+
+            // Get metrics for the last hour
+            LocalDateTime endTime = LocalDateTime.now();
+            LocalDateTime startTime = endTime.minusHours(1);
+
+            logger.logServerMetrics(
+                123,              // applicationId
+                "MyAppTier",      // tierName
+                startTime,
+                endTime
+            );
+
+        } catch (Exception e) {
+            System.err.println("Error in main: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+}
