@@ -1,0 +1,182 @@
+import javax.net.ssl.*;
+import java.security.cert.X509Certificate;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.security.SecureRandom;
+import java.util.Base64;
+
+public class RestUIWidgetFetcher {
+    private final String controllerUrl;
+    private final String username;
+    private final String password;
+    private final String accountName;
+    private final HttpClient httpClient;
+
+    public RestUIWidgetFetcher(String controllerUrl, String username, 
+                             String password, String accountName) throws Exception {
+        this.controllerUrl = controllerUrl;
+        this.username = username;
+        this.password = password;
+        this.accountName = accountName;
+
+        // SSL Configuration
+        TrustManager[] trustAllCerts = new TrustManager[]{
+            new X509TrustManager() {
+                public X509Certificate[] getAcceptedIssuers() { return null; }
+                public void checkClientTrusted(X509Certificate[] certs, String authType) { }
+                public void checkServerTrusted(X509Certificate[] certs, String authType) { }
+            }
+        };
+
+        SSLContext sslContext = SSLContext.getInstance("TLS");
+        sslContext.init(null, trustAllCerts, new SecureRandom());
+
+        SSLParameters sslParameters = new SSLParameters();
+        sslParameters.setEndpointIdentificationAlgorithm(null);
+
+        this.httpClient = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_2)
+            .sslContext(sslContext)
+            .sslParameters(sslParameters)
+            .build();
+    }
+
+    private String getAuthHeader() {
+        String auth = username + "@" + accountName + ":" + password;
+        return "Basic " + Base64.getEncoder().encodeToString(auth.getBytes());
+    }
+
+    public void fetchWidgetData(int applicationId, String dashboardId, String widgetId) {
+        try {
+            // Construct URL
+            String url = controllerUrl + "/controller/restui/dashboards/widgetData";
+            
+            // Create JSON payload
+            String jsonPayload = "{"
+                + "\"widgetId\":\"" + widgetId + "\","
+                + "\"dashboardId\":\"" + dashboardId + "\","
+                + "\"appId\":" + applicationId + ","
+                + "\"visualization\": {"
+                + "    \"type\":\"LIST\","
+                + "    \"visualization\":{}"
+                + "},"
+                + "\"offset\":0,"
+                + "\"limit\":20,"
+                + "\"timeRangeStart\":" + (System.currentTimeMillis() - 3600000) + ","  // 1 hour ago
+                + "\"timeRangeEnd\":" + System.currentTimeMillis() + ","
+                + "\"timeRangeString\":\"last_1_hour.BEFORE_NOW.-1.-1.60\","
+                + "\"applicationIds\":[" + applicationId + "],"
+                + "\"metrics\":[],"
+                + "\"properties\":[],"
+                + "\"dataFetchMode\":\"METRIC_GRAPH\","
+                + "\"dataFilter\":{"
+                + "    \"selectedDashboardId\":\"" + dashboardId + "\","
+                + "    \"selectedWidgetId\":\"" + widgetId + "\""
+                + "}"
+                + "}";
+
+            // Print request details
+            System.out.println("\nMaking request to:");
+            System.out.println("URL: " + url);
+            System.out.println("\nPayload:");
+            System.out.println(formatJson(jsonPayload));
+            System.out.println("\nHeaders:");
+            System.out.println("Authorization: " + getAuthHeader());
+            System.out.println("Content-Type: application/json");
+            System.out.println("Accept: application/json");
+
+            // Create and send request
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Authorization", getAuthHeader())
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .header("X-CSRF-TOKEN", "")  // Add if needed
+                .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
+                .build();
+
+            // Get response
+            HttpResponse<String> response = httpClient.send(request, 
+                HttpResponse.BodyHandlers.ofString());
+
+            // Print response
+            System.out.println("\nResponse:");
+            System.out.println("Status Code: " + response.statusCode());
+            System.out.println("Headers: " + response.headers().map());
+            System.out.println("\nBody:");
+            System.out.println(formatJson(response.body()));
+
+        } catch (Exception e) {
+            System.err.println("\nError occurred:");
+            System.err.println("Message: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    // Format JSON string for better readability
+    private String formatJson(String json) {
+        if (json == null || json.isEmpty()) return "";
+        
+        StringBuilder formatted = new StringBuilder();
+        int indent = 0;
+        boolean inQuotes = false;
+
+        for (char c : json.toCharArray()) {
+            switch (c) {
+                case '{':
+                case '[':
+                    formatted.append(c).append("\n").append("  ".repeat(++indent));
+                    break;
+                case '}':
+                case ']':
+                    formatted.append("\n").append("  ".repeat(--indent)).append(c);
+                    break;
+                case '"':
+                    inQuotes = !inQuotes;
+                    formatted.append(c);
+                    break;
+                case ',':
+                    formatted.append(c);
+                    if (!inQuotes) formatted.append("\n").append("  ".repeat(indent));
+                    break;
+                default:
+                    formatted.append(c);
+            }
+        }
+        return formatted.toString();
+    }
+
+    public static void main(String[] args) {
+        try {
+            // Replace these values with your AppDynamics details
+            String controllerUrl = "https://your-controller.example.com";  // Remove :8090 if not needed
+            String username = "your-username";
+            String password = "your-password";
+            String accountName = "your-account";
+            int applicationId = 123;  // Your application ID
+            String dashboardId = "your-dashboard-id";
+            String widgetId = "your-widget-id";
+
+            // Create fetcher instance
+            RestUIWidgetFetcher fetcher = new RestUIWidgetFetcher(
+                controllerUrl,
+                username,
+                password,
+                accountName
+            );
+
+            // Fetch and print widget data
+            fetcher.fetchWidgetData(
+                applicationId,
+                dashboardId,
+                widgetId
+            );
+
+        } catch (Exception e) {
+            System.err.println("Error in main: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+}
