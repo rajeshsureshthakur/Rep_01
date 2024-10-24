@@ -1,0 +1,222 @@
+import javax.net.ssl.*;
+import java.security.cert.X509Certificate;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.security.SecureRandom;
+import java.util.Base64;
+import java.util.List;
+import java.util.Map;
+
+public class RestUIWidgetFetcher {
+    private final String controllerUrl;
+    private final String username;
+    private final String password;
+    private final String accountName;
+    private final HttpClient httpClient;
+    private String csrfToken;
+    private String sessionCookie;
+
+    public RestUIWidgetFetcher(String controllerUrl, String username, 
+                             String password, String accountName) throws Exception {
+        this.controllerUrl = controllerUrl;
+        this.username = username;
+        this.password = password;
+        this.accountName = accountName;
+
+        TrustManager[] trustAllCerts = new TrustManager[]{
+            new X509TrustManager() {
+                public X509Certificate[] getAcceptedIssuers() { return null; }
+                public void checkClientTrusted(X509Certificate[] certs, String authType) { }
+                public void checkServerTrusted(X509Certificate[] certs, String authType) { }
+            }
+        };
+
+        SSLContext sslContext = SSLContext.getInstance("TLS");
+        sslContext.init(null, trustAllCerts, new SecureRandom());
+
+        SSLParameters sslParameters = new SSLParameters();
+        sslParameters.setEndpointIdentificationAlgorithm(null);
+
+        this.httpClient = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_2)
+            .sslContext(sslContext)
+            .sslParameters(sslParameters)
+            .followRedirects(HttpClient.Redirect.NORMAL)
+            .build();
+    }
+
+    private void login() throws Exception {
+        String loginUrl = controllerUrl + "/controller/auth?action=login";
+        
+        // Create login payload
+        String loginPayload = String.format("username=%s%%40%s&password=%s",
+            username, accountName, password);
+
+        HttpRequest loginRequest = HttpRequest.newBuilder()
+            .uri(URI.create(loginUrl))
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .header("Accept", "application/json, text/plain, */*")
+            .POST(HttpRequest.BodyPublishers.ofString(loginPayload))
+            .build();
+
+        System.out.println("\nSending login request:");
+        System.out.println("URL: " + loginUrl);
+
+        HttpResponse<String> loginResponse = httpClient.send(loginRequest, 
+            HttpResponse.BodyHandlers.ofString());
+
+        System.out.println("Login Response Status: " + loginResponse.statusCode());
+
+        // Extract cookies and CSRF token from response headers
+        Map<String, List<String>> headers = loginResponse.headers().map();
+        StringBuilder cookieBuilder = new StringBuilder();
+
+        if (headers.containsKey("set-cookie")) {
+            for (String cookie : headers.get("set-cookie")) {
+                // Extract and store the complete cookie string
+                cookieBuilder.append(cookie.split(";")[0]).append("; ");
+                
+                // Look for CSRF token in cookies
+                if (cookie.contains("X-CSRF-TOKEN=")) {
+                    csrfToken = cookie.substring(
+                        cookie.indexOf("X-CSRF-TOKEN=") + "X-CSRF-TOKEN=".length(),
+                        cookie.indexOf(";")
+                    );
+                    System.out.println("Found CSRF Token: " + csrfToken);
+                }
+            }
+            sessionCookie = cookieBuilder.toString().trim();
+            System.out.println("Session Cookies: " + sessionCookie);
+        }
+
+        if (csrfToken == null) {
+            throw new RuntimeException("Failed to get CSRF token from login response");
+        }
+    }
+
+    public void fetchWidgetData(int applicationId, String dashboardId, String widgetId) {
+        try {
+            // Login first
+            login();
+
+            String url = controllerUrl + "/controller/restui/dashboards/widgetData";
+            
+            long currentTime = System.currentTimeMillis();
+            long oneHourAgo = currentTime - (60 * 60 * 1000);
+
+            String jsonPayload = "{"
+                + "\"widgetId\":\"" + widgetId + "\","
+                + "\"dashboardId\":\"" + dashboardId + "\","
+                + "\"appId\":" + applicationId + ","
+                + "\"accountId\":\"" + accountName + "\","
+                + "\"visualization\":{"
+                + "    \"type\":\"METRIC_GRAPH\","
+                + "    \"visualization\":{"
+                + "        \"graphType\":\"LINE\""
+                + "    }"
+                + "},"
+                + "\"timeRangeString\":\"last_1_hour.BEFORE_NOW.-1.-1.60\","
+                + "\"timeRangeStart\":" + oneHourAgo + ","
+                + "\"timeRangeEnd\":" + currentTime + ","
+                + "\"dataFetchMode\":\"METRIC_GRAPH\","
+                + "\"applicationIds\":[" + applicationId + "]"
+                + "}";
+
+            System.out.println("\nMaking widget data request:");
+            System.out.println("URL: " + url);
+            System.out.println("Payload: " + formatJson(jsonPayload));
+            System.out.println("Using CSRF Token: " + csrfToken);
+            System.out.println("Using Cookies: " + sessionCookie);
+
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .header("X-CSRF-TOKEN", csrfToken)
+                .header("Cookie", sessionCookie)
+                .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
+                .build();
+
+            HttpResponse<String> response = httpClient.send(request, 
+                HttpResponse.BodyHandlers.ofString());
+
+            System.out.println("\nWidget Data Response:");
+            System.out.println("Status Code: " + response.statusCode());
+            if (response.statusCode() != 200) {
+                System.out.println("Error Response: " + response.body());
+            } else {
+                System.out.println("Response Body:");
+                System.out.println(formatJson(response.body()));
+            }
+
+        } catch (Exception e) {
+            System.err.println("\nError occurred:");
+            System.err.println("Message: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    // Format JSON string for readability
+    private String formatJson(String json) {
+        if (json == null || json.isEmpty()) return "";
+        
+        StringBuilder formatted = new StringBuilder();
+        int indent = 0;
+        boolean inQuotes = false;
+
+        for (char c : json.toCharArray()) {
+            switch (c) {
+                case '{':
+                case '[':
+                    formatted.append(c).append("\n").append("  ".repeat(++indent));
+                    break;
+                case '}':
+                case ']':
+                    formatted.append("\n").append("  ".repeat(--indent)).append(c);
+                    break;
+                case '"':
+                    inQuotes = !inQuotes;
+                    formatted.append(c);
+                    break;
+                case ',':
+                    formatted.append(c);
+                    if (!inQuotes) formatted.append("\n").append("  ".repeat(indent));
+                    break;
+                default:
+                    formatted.append(c);
+            }
+        }
+        return formatted.toString();
+    }
+
+    public static void main(String[] args) {
+        try {
+            String controllerUrl = "https://your-controller.example.com";
+            String username = "your-username";
+            String password = "your-password";
+            String accountName = "your-account";
+            int applicationId = 123;
+            String dashboardId = "your-dashboard-id";
+            String widgetId = "your-widget-id";
+
+            RestUIWidgetFetcher fetcher = new RestUIWidgetFetcher(
+                controllerUrl,
+                username,
+                password,
+                accountName
+            );
+
+            fetcher.fetchWidgetData(
+                applicationId,
+                dashboardId,
+                widgetId
+            );
+
+        } catch (Exception e) {
+            System.err.println("Error in main: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+}
