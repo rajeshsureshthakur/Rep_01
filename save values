@@ -53,3 +53,229 @@ private void parseNameAndValuesRobust(String jsonResponse, String csvFileName) {
             e.printStackTrace();
         }
     }
+
+
+
+
+
+
+
+
+
+
+import javax.net.ssl.*;
+import java.security.cert.X509Certificate;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.security.SecureRandom;
+import java.util.Base64;
+import java.io.*;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+
+public class RestUIWidgetFetcher {
+    private final String controllerUrl;
+    private final String username;
+    private final String password;
+    private final String accountName;
+    private final HttpClient httpClient;
+
+    public RestUIWidgetFetcher(String controllerUrl, String username, 
+                             String password, String accountName) throws Exception {
+        this.controllerUrl = controllerUrl;
+        this.username = username;
+        this.password = password;
+        this.accountName = accountName;
+
+        // SSL Configuration
+        TrustManager[] trustAllCerts = new TrustManager[]{
+            new X509TrustManager() {
+                public X509Certificate[] getAcceptedIssuers() { return null; }
+                public void checkClientTrusted(X509Certificate[] certs, String authType) { }
+                public void checkServerTrusted(X509Certificate[] certs, String authType) { }
+            }
+        };
+
+        SSLContext sslContext = SSLContext.getInstance("TLS");
+        sslContext.init(null, trustAllCerts, new SecureRandom());
+
+        SSLParameters sslParameters = new SSLParameters();
+        sslParameters.setEndpointIdentificationAlgorithm(null);
+
+        this.httpClient = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_2)
+            .sslContext(sslContext)
+            .sslParameters(sslParameters)
+            .build();
+    }
+
+    private String getAuthHeader() {
+        String auth = username + "@" + accountName + ":" + password;
+        return "Basic " + Base64.getEncoder().encodeToString(auth.getBytes());
+    }
+
+    // Helper method to escape CSV values
+    private String escapeCSV(String value) {
+        if (value == null) return "";
+        // Remove any newlines or carriage returns
+        value = value.replace("\n", " ").replace("\r", " ");
+        if (value.contains(",") || value.contains("\"") || value.contains(" ")) {
+            // Escape quotes by doubling them and wrap in quotes
+            return "\"" + value.replace("\"", "\"\"") + "\"";
+        }
+        return value;
+    }
+
+    private void parseNameAndValues(String jsonResponse, String csvFileName) {
+        try (FileWriter csvWriter = new FileWriter(csvFileName);
+             BufferedWriter writer = new BufferedWriter(csvWriter)) {
+            
+            // Write CSV header with timestamp
+            writer.write("Timestamp,Name,Value");
+            writer.newLine();
+
+            String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
+                .format(new Date());
+
+            // Split into lines for easier processing
+            String[] lines = jsonResponse.split("\n");
+            String currentName = null;
+            
+            for (int i = 0; i < lines.length; i++) {
+                String line = lines[i].trim();
+                
+                // Look for name
+                if (line.startsWith("\"name\"")) {
+                    String[] parts = line.split(":");
+                    if (parts.length > 1) {
+                        currentName = parts[1].trim()
+                            .replace("\"", "")
+                            .replace(",", "");
+                    }
+                }
+                // Look for value when we have a name
+                else if (currentName != null && line.startsWith("\"value\"")) {
+                    String[] parts = line.split(":");
+                    if (parts.length > 1) {
+                        String value = parts[1].trim()
+                            .replace("\"", "")
+                            .replace(",", "");
+
+                        // Write the pair to CSV
+                        writer.write(String.format("%s,%s,%s",
+                            timestamp,
+                            escapeCSV(currentName),
+                            value));
+                        writer.newLine();
+
+                        // Reset currentName for next pair
+                        currentName = null;
+                    }
+                }
+            }
+            
+            System.out.println("\nData has been saved to " + csvFileName);
+            
+        } catch (Exception e) {
+            System.err.println("Error saving data to CSV: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    public void fetchWidgetData(int applicationId, String dashboardId, String widgetId) {
+        try {
+            String url = controllerUrl + "/controller/restui/dashboards/widgetData";
+            
+            // Get current time
+            long currentTime = System.currentTimeMillis();
+            long oneHourAgo = currentTime - (60 * 60 * 1000);
+
+            String jsonPayload = "{"
+                + "\"widgetId\":\"" + widgetId + "\","
+                + "\"dashboardId\":\"" + dashboardId + "\","
+                + "\"appId\":" + applicationId + ","
+                + "\"accountId\":\"" + accountName + "\","
+                + "\"visualization\":{"
+                + "    \"type\":\"METRIC_GRAPH\","
+                + "    \"visualization\":{"
+                + "        \"graphType\":\"LINE\""
+                + "    }"
+                + "},"
+                + "\"timeRangeString\":\"last_1_hour.BEFORE_NOW.-1.-1.60\","
+                + "\"timeRangeStart\":" + oneHourAgo + ","
+                + "\"timeRangeEnd\":" + currentTime + ","
+                + "\"dataFetchMode\":\"METRIC_GRAPH\","
+                + "\"applicationIds\":[" + applicationId + "]"
+                + "}";
+
+            System.out.println("\nMaking widget data request:");
+            System.out.println("URL: " + url);
+            System.out.println("Payload: " + jsonPayload);
+
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .header("Authorization", getAuthHeader())
+                .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
+                .build();
+
+            HttpResponse<String> response = httpClient.send(request, 
+                HttpResponse.BodyHandlers.ofString());
+
+            System.out.println("\nWidget Data Response:");
+            System.out.println("Status Code: " + response.statusCode());
+            
+            if (response.statusCode() == 200) {
+                String responseBody = response.body();
+                
+                // Create filename with timestamp
+                String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss")
+                    .format(new Date());
+                String csvFileName = "widget_data_" + timestamp + ".csv";
+                
+                // Parse and save name-value pairs
+                parseNameAndValues(responseBody, csvFileName);
+                
+            } else {
+                System.out.println("Error Response: " + response.body());
+            }
+
+        } catch (Exception e) {
+            System.err.println("\nError occurred:");
+            System.err.println("Message: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    public static void main(String[] args) {
+        try {
+            String controllerUrl = "https://your-controller.example.com";
+            String username = "your-username";
+            String password = "your-password";
+            String accountName = "your-account";
+            int applicationId = 123;
+            String dashboardId = "your-dashboard-id";
+            String widgetId = "your-widget-id";
+
+            RestUIWidgetFetcher fetcher = new RestUIWidgetFetcher(
+                controllerUrl,
+                username,
+                password,
+                accountName
+            );
+
+            fetcher.fetchWidgetData(
+                applicationId,
+                dashboardId,
+                widgetId
+            );
+
+        } catch (Exception e) {
+            System.err.println("Error in main: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+}
