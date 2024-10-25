@@ -1,0 +1,100 @@
+private void parseNameAndValues(String jsonResponse, String csvFileName) {
+        try (FileWriter csvWriter = new FileWriter(csvFileName);
+             BufferedWriter writer = new BufferedWriter(csvWriter)) {
+            
+            // Write CSV header with timestamp
+            writer.write("Timestamp,Application,Value");
+            writer.newLine();
+
+            String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
+                .format(new Date());
+
+            // Split into lines for easier processing
+            String[] lines = jsonResponse.split("\n");
+            String currentName = null;
+            
+            for (int i = 0; i < lines.length; i++) {
+                String line = lines[i].trim();
+                
+                // Look for name
+                if (line.startsWith("\"name\"")) {
+                    String[] parts = line.split(":");
+                    if (parts.length > 1) {
+                        // Get everything after first colon
+                        String fullName = line.substring(line.indexOf(":") + 1).trim();
+                        
+                        // Remove any trailing comma and quotes
+                        fullName = fullName.replace("\"", "").replace(",", "").trim();
+                        
+                        // If contains "component:", extract application name
+                        if (fullName.contains("component:")) {
+                            String componentPart = fullName.substring(
+                                fullName.indexOf("component:") + "component:".length()).trim();
+                            
+                            // Get text before ">"
+                            if (componentPart.contains(">")) {
+                                currentName = componentPart.substring(0, 
+                                    componentPart.indexOf(">")).trim();
+                            } else {
+                                currentName = componentPart;
+                            }
+                        }
+                    }
+                }
+                // Look for value when we have a name
+                else if (currentName != null && line.startsWith("\"value\"")) {
+                    String[] parts = line.split(":");
+                    if (parts.length > 1) {
+                        String value = parts[1].trim()
+                            .replace("\"", "")
+                            .replace(",", "");
+
+                        // Write the pair to CSV
+                        writer.write(String.format("%s,%s,%s",
+                            timestamp,
+                            escapeCSV(currentName),
+                            value));
+                        writer.newLine();
+
+                        // Reset currentName for next pair
+                        currentName = null;
+                    }
+                }
+            }
+            
+            System.out.println("\nData has been saved to " + csvFileName);
+            
+            // Print preview of the data
+            System.out.println("\nData Preview:");
+            System.out.println("Timestamp,Application,Value");
+            try (BufferedReader reader = new BufferedReader(new FileReader(csvFileName))) {
+                String line;
+                int count = 0;
+                // Skip header
+                reader.readLine();
+                // Print first 5 lines
+                while ((line = reader.readLine()) != null && count < 5) {
+                    System.out.println(line);
+                    count++;
+                }
+            }
+
+        } catch (Exception e) {
+            System.err.println("Error saving data to CSV: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    // Helper method to escape CSV values
+    private String escapeCSV(String value) {
+        if (value == null) return "";
+        // Remove any newlines or carriage returns and trim whitespace
+        value = value.replace("\n", " ")
+                    .replace("\r", " ")
+                    .trim();
+        if (value.contains(",") || value.contains("\"") || value.contains(" ")) {
+            // Escape quotes by doubling them and wrap in quotes
+            return "\"" + value.replace("\"", "\"\"") + "\"";
+        }
+        return value;
+    }
