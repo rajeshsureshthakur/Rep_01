@@ -1,0 +1,94 @@
+private void parseNameAndValues(String jsonResponse, String csvFileName) {
+        try (FileWriter csvWriter = new FileWriter(csvFileName)) {
+            // Write header
+            csvWriter.write("Application,Metric,Value\n");
+            
+            String[] lines = jsonResponse.split("\n");
+            String appName = null;
+            Double value = null;
+            
+            for (String line : lines) {
+                line = line.trim();
+                
+                // Find application name
+                if (line.contains("\"name\"") && (line.contains("Component:") || line.contains("Component :"))) {
+                    try {
+                        // Find the application name part
+                        if (line.contains("application-")) {
+                            int startIndex = line.indexOf("application-") + "application-".length();
+                            int endIndex = line.indexOf(">", startIndex);
+                            if (endIndex != -1) {
+                                appName = line.substring(startIndex, endIndex).trim()
+                                    .replace("\"", "")
+                                    .replace(",", "");
+                            }
+                        }
+                    } catch (Exception e) {
+                        System.err.println("Error parsing application name: " + line);
+                    }
+                }
+                
+                // Find value and write to CSV if it's a number
+                if (line.contains("\"value\"")) {
+                    try {
+                        String valueStr = line.split(":")[1].trim()
+                            .replace(",", "")
+                            .replace("\"", "");
+                        
+                        // Only process if it's not null
+                        if (!valueStr.equals("null")) {
+                            try {
+                                value = Double.parseDouble(valueStr);
+                                
+                                // Write to CSV if we have both app name and value
+                                if (appName != null && value != null) {
+                                    String csvLine = String.format("%s,%s,%.1f\n",
+                                        escapeCSV(appName),
+                                        escapeCSV("Process CPU Usage %"),
+                                        value
+                                    );
+                                    csvWriter.write(csvLine);
+                                    csvWriter.flush();
+                                }
+                            } catch (NumberFormatException nfe) {
+                                // Skip if value is not a number
+                            }
+                        }
+                    } catch (Exception e) {
+                        System.err.println("Error parsing value: " + line);
+                    }
+                }
+            }
+            
+            // Verify file has content
+            File csvFile = new File(csvFileName);
+            if (csvFile.exists() && csvFile.length() > 0) {
+                System.out.println("Data saved to: " + csvFileName);
+                // Print first few lines of CSV for verification
+                try (BufferedReader reader = new BufferedReader(new FileReader(csvFileName))) {
+                    String line;
+                    int lineCount = 0;
+                    while ((line = reader.readLine()) != null && lineCount < 5) {
+                        System.out.println(line);
+                        lineCount++;
+                    }
+                }
+            } else {
+                System.err.println("CSV file is empty or was not created");
+            }
+            
+        } catch (Exception e) {
+            System.err.println("Error saving to CSV: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    private String escapeCSV(String value) {
+        if (value == null || value.isEmpty()) {
+            return "";
+        }
+        if (value.contains(",") || value.contains("\"") || value.contains("%") || value.contains(" ")) {
+            return "\"" + value.replace("\"", "\"\"") + "\"";
+        }
+        return value;
+    }
