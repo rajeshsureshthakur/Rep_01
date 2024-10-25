@@ -1,0 +1,55 @@
+private void parseNameAndValuesRobust(String jsonResponse, String csvFileName) {
+        try (FileWriter csvWriter = new FileWriter(csvFileName);
+             BufferedWriter writer = new BufferedWriter(csvWriter)) {
+            
+            // Write CSV header with timestamp
+            writer.write("Timestamp,Name,Value");
+            writer.newLine();
+
+            String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
+                .format(new Date());
+
+            // Split into lines for easier processing
+            String[] lines = jsonResponse.split("\n");
+            String currentName = null;
+            
+            for (int i = 0; i < lines.length; i++) {
+                String line = lines[i].trim();
+                
+                // Look for name
+                if (line.startsWith("\"name\"")) {
+                    String[] parts = line.split(":");
+                    if (parts.length > 1) {
+                        currentName = parts[1].trim()
+                            .replace("\"", "")
+                            .replace(",", "");
+                    }
+                }
+                // Look for value when we have a name
+                else if (currentName != null && line.startsWith("\"value\"")) {
+                    String[] parts = line.split(":");
+                    if (parts.length > 1) {
+                        String value = parts[1].trim()
+                            .replace("\"", "")
+                            .replace(",", "");
+
+                        // Write the pair to CSV
+                        writer.write(String.format("%s,%s,%s",
+                            timestamp,
+                            escapeCSV(currentName),
+                            value));
+                        writer.newLine();
+
+                        // Reset currentName for next pair
+                        currentName = null;
+                    }
+                }
+            }
+            
+            System.out.println("\nData has been saved to " + csvFileName);
+            
+        } catch (Exception e) {
+            System.err.println("Error saving data to CSV: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
