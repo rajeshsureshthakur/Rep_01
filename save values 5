@@ -1,0 +1,109 @@
+private void parseNameAndValues(String jsonResponse, String csvFileName) {
+        try (FileWriter csvWriter = new FileWriter(csvFileName);
+             BufferedWriter writer = new BufferedWriter(csvWriter)) {
+            
+            writer.write("Timestamp,Application,Value");
+            writer.newLine();
+
+            String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
+                .format(new Date());
+
+            String[] lines = jsonResponse.split("\n");
+            String currentName = null;
+            
+            for (int i = 0; i < lines.length; i++) {
+                String line = lines[i].trim();
+                
+                if (line.contains("\"name\"")) {
+                    String fullLine = line.trim();
+                    int startIndex = fullLine.indexOf("component:");
+                    if (startIndex != -1) {
+                        String temp = fullLine.substring(startIndex + "component:".length());
+                        int endIndex = temp.indexOf(">");
+                        if (endIndex != -1) {
+                            currentName = temp.substring(0, endIndex).trim();
+                        }
+                    }
+                }
+                else if (currentName != null && line.contains("\"value\"")) {
+                    int valueIndex = line.indexOf(":");
+                    if (valueIndex != -1) {
+                        String value = line.substring(valueIndex + 1).trim();
+                        if (value.endsWith(",")) {
+                            value = value.substring(0, value.length() - 1);
+                        }
+                        
+                        writer.write(String.format("%s,%s,%s",
+                            timestamp,
+                            escapeCSV(currentName),
+                            value));
+                        writer.newLine();
+                        writer.flush();
+                        currentName = null;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Error saving data to CSV: " + e.getMessage());
+        }
+    }
+
+    private String escapeCSV(String value) {
+        if (value == null) return "";
+        value = value.replace("\n", " ")
+                    .replace("\r", " ")
+                    .trim();
+        if (value.contains(",") || value.contains("\"") || value.contains(" ")) {
+            return "\"" + value.replace("\"", "\"\"") + "\"";
+        }
+        return value;
+    }
+
+    public void fetchWidgetData(int applicationId, String dashboardId, String widgetId) {
+        try {
+            String url = controllerUrl + "/controller/restui/dashboards/widgetData";
+            
+            long currentTime = System.currentTimeMillis();
+            long oneHourAgo = currentTime - (60 * 60 * 1000);
+
+            String jsonPayload = "{"
+                + "\"widgetId\":\"" + widgetId + "\","
+                + "\"dashboardId\":\"" + dashboardId + "\","
+                + "\"appId\":" + applicationId + ","
+                + "\"accountId\":\"" + accountName + "\","
+                + "\"visualization\":{"
+                + "    \"type\":\"METRIC_GRAPH\","
+                + "    \"visualization\":{"
+                + "        \"graphType\":\"LINE\""
+                + "    }"
+                + "},"
+                + "\"timeRangeString\":\"last_1_hour.BEFORE_NOW.-1.-1.60\","
+                + "\"timeRangeStart\":" + oneHourAgo + ","
+                + "\"timeRangeEnd\":" + currentTime + ","
+                + "\"dataFetchMode\":\"METRIC_GRAPH\","
+                + "\"applicationIds\":[" + applicationId + "]"
+                + "}";
+
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .header("Authorization", getAuthHeader())
+                .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
+                .build();
+
+            HttpResponse<String> response = httpClient.send(request, 
+                HttpResponse.BodyHandlers.ofString());
+            
+            if (response.statusCode() == 200) {
+                String responseBody = response.body();
+                String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss")
+                    .format(new Date());
+                String csvFileName = "widget_data_" + timestamp + ".csv";
+                parseNameAndValues(responseBody, csvFileName);
+            }
+
+        } catch (Exception e) {
+            System.err.println("Error: " + e.getMessage());
+        }
+    }
