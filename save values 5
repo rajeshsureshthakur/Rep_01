@@ -107,3 +107,76 @@ private void parseNameAndValues(String jsonResponse, String csvFileName) {
             System.err.println("Error: " + e.getMessage());
         }
     }
+
+
+
+
+
+
+
+
+
+
+private void parseNameAndValues(String jsonResponse, String csvFileName) {
+        try (FileWriter csvWriter = new FileWriter(csvFileName);
+             BufferedWriter writer = new BufferedWriter(csvWriter)) {
+            
+            writer.write("Application,Metric,Value");
+            writer.newLine();
+
+            String[] lines = jsonResponse.split("\n");
+            String appName = null;
+            String metricName = null;
+            String value = null;
+            
+            for (String line : lines) {
+                line = line.trim();
+                
+                // Get application name
+                if (line.contains("\"name\"") && line.contains("component:")) {
+                    int startIndex = line.indexOf("component:") + "component:".length();
+                    int endIndex = line.indexOf(">", startIndex);
+                    if (endIndex != -1) {
+                        appName = line.substring(startIndex, endIndex).trim();
+                    }
+                }
+                
+                // Get CPU Usage value from full metric name
+                if (line.contains("\"name\"") && line.contains("CPU Usage")) {
+                    int startIndex = line.lastIndexOf(">") + 1;
+                    if (startIndex != -1) {
+                        metricName = line.substring(startIndex)
+                            .replace("\"", "")
+                            .replace(",", "")
+                            .trim();
+                    }
+                }
+                
+                // Get value
+                if (line.contains("\"value\"")) {
+                    int startIndex = line.indexOf(":") + 1;
+                    value = line.substring(startIndex)
+                        .replace("\"", "")
+                        .replace(",", "")
+                        .trim();
+                    
+                    // If we have all three pieces, write to CSV
+                    if (appName != null && metricName != null && value != null) {
+                        writer.write(String.format("%s,%s,%s",
+                            appName,
+                            metricName,
+                            value));
+                        writer.newLine();
+                        
+                        // Reset values
+                        appName = null;
+                        metricName = null;
+                        value = null;
+                    }
+                }
+            }
+            
+        } catch (Exception e) {
+            System.err.println("Error saving data: " + e.getMessage());
+        }
+    }
