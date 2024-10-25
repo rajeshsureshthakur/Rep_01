@@ -1,0 +1,162 @@
+private void parseNameAndValues(String jsonResponse, String csvFileName) {
+        try (FileWriter csvWriter = new FileWriter(csvFileName)) {
+            // Write header
+            csvWriter.write("Application,Metric,Value\n");
+            
+            // Find the start of pieSeriesData
+            String[] lines = jsonResponse.split("\n");
+            boolean foundData = false;
+            
+            // For storing values
+            String appName = null;
+            String metricName = null;
+            String value = null;
+            
+            for (String line : lines) {
+                line = line.trim();
+                
+                // Find application name
+                if (line.contains("component:")) {
+                    appName = line.substring(
+                        line.indexOf("component:") + "component:".length(),
+                        line.indexOf(">")
+                    ).trim();
+                }
+                
+                // Find Process CPU Usage
+                if (line.contains("Process CPU Usage")) {
+                    int startIndex = line.lastIndexOf(">") + 1;
+                    if (startIndex > 0) {
+                        metricName = "Process CPU Usage %";
+                    }
+                }
+                
+                // Find value
+                if (line.startsWith("\"value\"")) {
+                    String[] parts = line.split(":");
+                    if (parts.length > 1) {
+                        value = parts[1].replace(",", "").trim();
+                        
+                        // If we have all components, write to CSV
+                        if (appName != null && metricName != null && value != null) {
+                            String csvLine = String.format("%s,%s,%s\n",
+                                escapeCSV(appName),
+                                escapeCSV(metricName),
+                                value
+                            );
+                            csvWriter.write(csvLine);
+                            csvWriter.flush();
+                            foundData = true;
+                            
+                            // Reset for next set
+                            appName = null;
+                            metricName = null;
+                            value = null;
+                        }
+                    }
+                }
+            }
+            
+            if (!foundData) {
+                System.err.println("No data was written to CSV. Check JSON response format.");
+            }
+            
+        } catch (Exception e) {
+            System.err.println("Error saving to CSV: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    private String escapeCSV(String value) {
+        if (value == null || value.isEmpty()) {
+            return "";
+        }
+        if (value.contains(",") || value.contains("\"") || value.contains("%") || value.contains(" ")) {
+            return "\"" + value.replace("\"", "\"\"") + "\"";
+        }
+        return value;
+    }
+
+    // Test method to verify parsing
+    private void verifyParsing(String jsonResponse) {
+        String[] lines = jsonResponse.split("\n");
+        for (String line : lines) {
+            if (line.contains("component:")) {
+                System.out.println("Found application line: " + line);
+            }
+            if (line.contains("Process CPU Usage")) {
+                System.out.println("Found metric line: " + line);
+            }
+            if (line.contains("\"value\"")) {
+                System.out.println("Found value line: " + line);
+            }
+        }
+    }
+
+    public void fetchWidgetData(int applicationId, String dashboardId, String widgetId) {
+        try {
+            String url = controllerUrl + "/controller/restui/dashboards/widgetData";
+            
+            long currentTime = System.currentTimeMillis();
+            long oneHourAgo = currentTime - (60 * 60 * 1000);
+
+            String jsonPayload = "{"
+                + "\"widgetId\":\"" + widgetId + "\","
+                + "\"dashboardId\":\"" + dashboardId + "\","
+                + "\"appId\":" + applicationId + ","
+                + "\"accountId\":\"" + accountName + "\","
+                + "\"visualization\":{"
+                + "    \"type\":\"METRIC_GRAPH\","
+                + "    \"visualization\":{"
+                + "        \"graphType\":\"LINE\""
+                + "    }"
+                + "},"
+                + "\"timeRangeString\":\"last_1_hour.BEFORE_NOW.-1.-1.60\","
+                + "\"timeRangeStart\":" + oneHourAgo + ","
+                + "\"timeRangeEnd\":" + currentTime + ","
+                + "\"dataFetchMode\":\"METRIC_GRAPH\","
+                + "\"applicationIds\":[" + applicationId + "]"
+                + "}";
+
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .header("Authorization", getAuthHeader())
+                .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
+                .build();
+
+            HttpResponse<String> response = httpClient.send(request, 
+                HttpResponse.BodyHandlers.ofString());
+            
+            if (response.statusCode() == 200) {
+                String responseBody = response.body();
+                
+                // Verify we can find the required data
+                verifyParsing(responseBody);
+                
+                // Generate filename with timestamp
+                String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss")
+                    .format(new Date());
+                String csvFileName = "widget_data_" + timestamp + ".csv";
+                
+                // Parse and save data
+                parseNameAndValues(responseBody, csvFileName);
+                
+                // Verify file was created and has content
+                File csvFile = new File(csvFileName);
+                if (csvFile.exists() && csvFile.length() > 0) {
+                    System.out.println("Data saved to: " + csvFileName);
+                } else {
+                    System.err.println("CSV file is empty or was not created");
+                }
+                
+            } else {
+                System.err.println("Error response: " + response.statusCode());
+            }
+
+        } catch (Exception e) {
+            System.err.println("Error: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
