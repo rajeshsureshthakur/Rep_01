@@ -1,0 +1,44 @@
+// This method is called when logs are updated
+    private static void triggerBlinkOnLogUpdate() {
+        if (!isLogUpdated) {
+            isLogUpdated = true;
+            startBlinking(); // Start blinking when logs are updated
+        }
+    }
+
+    // This method starts the blinking effect
+    private static void startBlinking() {
+        if (blinkTimer != null && blinkTimer.isRunning()) {
+            blinkTimer.restart(); // Reset blink cycle if already running
+            return;
+        }
+
+        blinkTimer = new Timer(300, e -> {
+            blinkState = !blinkState;
+            border.setTitleColor(blinkState ? Color.BLUE : Color.WHITE); // Toggle color
+            // Ensure repaint is on the Event Dispatch Thread (EDT)
+            SwingUtilities.invokeLater(() -> {
+                // Repaint the border to reflect the updated title color
+                JScrollPane scrollPane = (JScrollPane) e.getSource();
+                scrollPane.revalidate();
+                scrollPane.repaint();
+            });
+        });
+
+        blinkTimer.setRepeats(true);
+        blinkTimer.setInitialDelay(0);
+        blinkTimer.start();
+
+        // Stop blinking after 2 seconds (adjust as needed)
+        new Timer(2000, e -> {
+            blinkTimer.stop();
+            border.setTitleColor(Color.BLUE); // Ensure it stays blue after blinking
+            isLogUpdated = false; // Reset log updated flag
+            SwingUtilities.invokeLater(() -> {
+                // Ensure repaint happens on EDT
+                JScrollPane scrollPane = (JScrollPane) e.getSource();
+                scrollPane.revalidate();
+                scrollPane.repaint();
+            });
+        }).start();
+    }
