@@ -1,0 +1,75 @@
+import javax.swing.*;
+import java.awt.*;
+import java.awt.event.*;
+import javax.swing.border.TitledBorder;
+
+public class LogPanelWithBlinkingStatus {
+
+    private static boolean blinkState = false;
+    private static Timer blinkTimer;
+    private static TitledBorder border;
+    private static boolean isLogUpdated = false; // Track if logs were updated
+
+    public static void main(String[] args) {
+        // Create the frame
+        JFrame frame = new JFrame("Log Panel");
+        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        frame.setSize(500, 300);
+
+        // Create the TextArea for logs
+        TextArea logArea = new TextArea(10, 40);
+        logArea.setEditable(false);
+        logArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
+
+        // Set the border for title with the blinking effect
+        border = BorderFactory.createTitledBorder("Processing Status...");
+        border.setTitleFont(new Font("Arial", Font.BOLD, 14));
+        border.setTitleColor(Color.BLUE);  // Initial color of title
+
+        // Wrap TextArea inside JScrollPane
+        JScrollPane scrollPane = new JScrollPane(logArea);
+        scrollPane.setBorder(border);  // Set the border with title
+
+        frame.add(scrollPane, BorderLayout.CENTER);
+        frame.setVisible(true);
+
+        // Simulate log updates (You can replace this with actual batch file execution logic)
+        new Timer(2000, e -> {
+            logArea.append("Log message at " + System.currentTimeMillis() + "\n");
+            triggerBlinkOnLogUpdate(); // Start blinking when logs are updated
+        }).start();
+    }
+
+    // This method is called when logs are updated
+    private static void triggerBlinkOnLogUpdate() {
+        if (!isLogUpdated) {
+            isLogUpdated = true;
+            startBlinking(); // Start blinking when logs are updated
+        }
+    }
+
+    // This method starts the blinking effect
+    private static void startBlinking() {
+        if (blinkTimer != null && blinkTimer.isRunning()) {
+            blinkTimer.restart(); // Reset blink cycle if already running
+            return;
+        }
+
+        blinkTimer = new Timer(300, e -> {
+            blinkState = !blinkState;
+            border.setTitleColor(blinkState ? Color.BLUE : Color.WHITE); // Toggle color
+            SwingUtilities.getWindowAncestor((Component) e.getSource()).repaint();
+        });
+
+        blinkTimer.setRepeats(true);
+        blinkTimer.setInitialDelay(0);
+        blinkTimer.start();
+
+        // Stop blinking after 2 seconds (adjust as needed)
+        new Timer(2000, e -> {
+            blinkTimer.stop();
+            border.setTitleColor(Color.BLUE); // Ensure it stays blue after blinking
+            isLogUpdated = false; // Reset log updated flag
+        }).start();
+    }
+}
