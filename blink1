@@ -1,0 +1,26 @@
+// Start blinking the title
+    private void triggerBlink() {
+        if (blinkTimer != null && blinkTimer.isRunning()) {
+            blinkTimer.restart(); // Restart blinking on new log
+            return;
+        }
+
+        blinkState = false;
+        blinkTimer = new Timer(500, (ActionEvent e) -> {
+            blinkState = !blinkState;
+            if (border != null) {
+                border.setTitleColor(blinkState ? Color.BLUE : Color.GRAY);
+                scrollPane.repaint();
+            }
+        });
+
+        blinkTimer.setRepeats(true);
+        blinkTimer.start();
+
+        // Stop blinking after 4 seconds
+        new Timer(4000, e -> {
+            blinkTimer.stop();
+            border.setTitleColor(Color.BLUE); // Reset to default color
+            scrollPane.repaint();
+        }).start();
+    }
