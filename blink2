@@ -1,0 +1,38 @@
+private boolean hasStartedBlinking = false;
+
+private void addLog(String message) {
+    logArea.append(message + "\n");
+
+    // Start blinking only once on the first log
+    if (!hasStartedBlinking) {
+        hasStartedBlinking = true;
+        startBlinking();
+    }
+
+    // Stop blinking if log contains a specific completion message
+    if (message.toLowerCase().contains("completed successfully")) {
+        stopBlinking();
+    }
+}
+
+private void startBlinking() {
+    blinkTimer = new Timer(500, e -> {
+        blinkState = !blinkState;
+        if (border != null) {
+            border.setTitleColor(blinkState ? Color.BLUE : Color.GRAY);
+            scrollPane.repaint();
+        }
+    });
+    blinkTimer.setRepeats(true);
+    blinkTimer.start();
+}
+
+private void stopBlinking() {
+    if (blinkTimer != null) {
+        blinkTimer.stop();
+    }
+    if (border != null) {
+        border.setTitleColor(Color.BLUE); // Reset to default
+        scrollPane.repaint();
+    }
+}
