@@ -1,0 +1,65 @@
+// Declare at class level
+private Timer blinkTimer;
+private boolean blinkState = false;
+private boolean hasStartedBlinking = false;
+private String baseTitle = "Processing status: Standby";
+private TitledBorder border;
+private JScrollPane scrollPane;
+
+// Call this to initialize border
+private void setupLogArea() {
+    logArea = new TextArea(10, 40);
+    logArea.setEditable(false);
+    logArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
+    
+    scrollPane = new JScrollPane(logArea);
+    border = BorderFactory.createTitledBorder(baseTitle);
+    border.setTitleColor(Color.GRAY);  // Set Standby color as gray initially
+    scrollPane.setBorder(border);
+    
+    DefaultCaret caret = (DefaultCaret) logArea.getCaret();
+    caret.setUpdatePolicy(DefaultCaret.ALWAYS_UPDATE);
+}
+
+
+private void addLog(String message) {
+    logArea.append(message + "\n");
+
+    // Start blinking on the first log message
+    if (!hasStartedBlinking) {
+        hasStartedBlinking = true;
+        startBlinkingTitle();
+    }
+
+    // Stop blinking if the message contains the completion signal
+    if (message.toLowerCase().contains("completed successfully")) {
+        stopBlinkingTitle();
+    }
+}
+
+
+private void startBlinkingTitle() {
+    blinkTimer = new Timer(500, e -> {
+        blinkState = !blinkState;
+        if (border != null) {
+            // "LIVE Feed" blinks in blue and gray
+            String status = blinkState ? "LIVE Feed" : "         ";  // Blink effect
+            border.setTitle("Processing status: " + status);
+            border.setTitleColor(blinkState ? Color.BLUE : Color.GRAY);
+            scrollPane.repaint();
+        }
+    });
+    blinkTimer.setRepeats(true);
+    blinkTimer.start();
+}
+
+
+private void stopBlinkingTitle() {
+    if (blinkTimer != null) {
+        blinkTimer.stop();
+    }
+    hasStartedBlinking = false;
+    border.setTitle("Processing status: Standby");
+    border.setTitleColor(Color.GRAY);  // Revert to Gray
+    scrollPane.repaint();
+}
