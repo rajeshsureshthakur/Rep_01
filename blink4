@@ -1,0 +1,62 @@
+private String basePrefix = "<html><span style='color:gray;'>Processing status: Standby</span></html>";
+private TitledBorder border;
+private JScrollPane scrollPane;
+private Timer blinkTimer;
+private boolean blinkState = false;
+private boolean hasStartedBlinking = false;
+
+private void setupLogArea() {
+    logArea = new TextArea(10, 40);
+    logArea.setEditable(false);
+    logArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
+
+    scrollPane = new JScrollPane(logArea);
+    border = BorderFactory.createTitledBorder(basePrefix);
+    scrollPane.setBorder(border);
+
+    DefaultCaret caret = (DefaultCaret) logArea.getCaret();
+    caret.setUpdatePolicy(DefaultCaret.ALWAYS_UPDATE);
+}
+
+
+private void addLog(String message) {
+    logArea.append(message + "\n");
+
+    if (!hasStartedBlinking) {
+        hasStartedBlinking = true;
+        startBlinkingTitle();
+    }
+
+    if (message.toLowerCase().contains("completed successfully")) {
+        stopBlinkingTitle();
+    }
+}
+
+
+private void startBlinkingTitle() {
+    blinkTimer = new Timer(500, e -> {
+        blinkState = !blinkState;
+
+        String blinkingPart = blinkState
+            ? "<span style='color:blue;'>LIVE Feed</span>"
+            : "<span style='color:gray;'>LIVE Feed</span>";
+
+        String fullTitle = "<html><span style='color:green;'>Processing status:</span> " + blinkingPart + "</html>";
+        border.setTitle(fullTitle);
+        scrollPane.repaint();
+    });
+    blinkTimer.setRepeats(true);
+    blinkTimer.start();
+}
+
+
+private void stopBlinkingTitle() {
+    if (blinkTimer != null) {
+        blinkTimer.stop();
+    }
+    hasStartedBlinking = false;
+
+    String standbyTitle = "<html><span style='color:gray;'>Processing status: Standby</span></html>";
+    border.setTitle(standbyTitle);
+    scrollPane.repaint();
+}
