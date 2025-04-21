@@ -1,0 +1,19 @@
+def find_similar_issues(user_input, df, vectorizer, tfidf_matrix, top_n=3, similarity_threshold=0.3):
+    user_tfidf = vectorizer.transform([user_input])
+    cosine_sim = cosine_similarity(user_tfidf, tfidf_matrix).flatten()
+    
+    # Get all indices sorted by similarity
+    sorted_indices = cosine_sim.argsort()[::-1]
+    
+    # Filter to keep only issues that meet the similarity threshold
+    result_issues = []
+    for idx in sorted_indices:
+        # Only consider issues with similarity greater than the threshold
+        if cosine_sim[idx] >= similarity_threshold:
+            result_issues.append(idx)
+        
+        # Stop once we have enough issues (based on top_n)
+        if len(result_issues) >= top_n:
+            break
+    
+    return result_issues, cosine_sim
