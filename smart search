@@ -1,0 +1,101 @@
+import pandas as pd
+from flask import Flask, render_template_string, request
+import os
+
+# Try using sentence-transformers for better semantic search
+try:
+    from sentence_transformers import SentenceTransformer, util
+    use_smart_search = True
+    model = SentenceTransformer('all-MiniLM-L6-v2')
+except ImportError:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+    use_smart_search = False
+
+app = Flask(__name__)
+
+def load_data():
+    try:
+        return pd.read_csv("defects.csv", on_bad_lines='skip')
+    except Exception as e:
+        print(f"Error loading CSV: {e}")
+        return None
+
+def find_similar_issues(query, df, top_n=5):
+    descriptions = df['Description'].fillna("").tolist()
+    
+    if use_smart_search:
+        embeddings = model.encode(descriptions, convert_to_tensor=True)
+        query_embedding = model.encode(query, convert_to_tensor=True)
+        scores = util.pytorch_cos_sim(query_embedding, embeddings)[0]
+        top_indices = scores.argsort(descending=True)[:top_n]
+        return [i.item() for i in top_indices], [scores[i].item() for i in top_indices]
+    
+    else:
+        vectorizer = TfidfVectorizer(stop_words='english')
+        tfidf_matrix = vectorizer.fit_transform(descriptions)
+        query_tfidf = vectorizer.transform([query])
+        cosine_sim = cosine_similarity(query_tfidf, tfidf_matrix).flatten()
+        top_indices = cosine_sim.argsort()[::-1][:top_n]
+        return top_indices, cosine_sim[top_indices]
+
+@app.route('/')
+def home():
+    return render_template_string('''
+        <html><head><title>Defect Assistant</title></head>
+        <body style="text-align:center; font-family:Arial">
+            <h2>🛠️ Defect Assistant</h2>
+            <form method="post" action="/search">
+                <input type="text" name="user_query" placeholder="Enter defect description" required style="width:60%; padding:10px;" />
+                <br><br>
+                <input type="submit" value="Search" style="padding:10px 20px;" />
+            </form>
+        </body></html>
+    ''')
+
+@app.route('/search', methods=['POST'])
+def search():
+    query = request.form['user_query']
+    df = load_data()
+    if df is None:
+        return "CSV load error"
+
+    top_indices, scores = find_similar_issues(query, df)
+    result_data = []
+    for idx, score in zip(top_indices, scores):
+        result_data.append({
+            "Issue Key": df.iloc[idx].get('Issue key', 'N/A'),
+            "Summary": df.iloc[idx].get('Summary', 'N/A'),
+            "Status": df.iloc[idx].get('Status', 'N/A'),
+            "Fix Version": df.iloc[idx].get('Fix Version', 'N/A'),
+            "Severity": df.iloc[idx].get('Severity', 'N/A'),
+            "Description": df.iloc[idx].get('Description', ''),
+            "Resolution": df.iloc[idx].get('Comment', 'N/A'),
+            "Similarity Score": f"{score:.2f}"
+        })
+
+    return render_template_string('''
+        <html>
+        <head><title>Results</title></head>
+        <body style="font-family:Arial; margin:30px;">
+            <h3>🔍 Similar Issues</h3>
+            <table border="1" cellpadding="8" style="width:100%; border-collapse: collapse;">
+                <tr>
+                    <th>Issue Key</th><th>Summary</th><th>Status</th><th>Fix Version</th>
+                    <th>Severity</th><th>Description</th><th>Resolution</th><th>Similarity</th>
+                </tr>
+                {% for issue in result_data %}
+                <tr>
+                    <td>{{ issue['Issue Key'] }}</td><td>{{ issue['Summary'] }}</td><td>{{ issue['Status'] }}</td>
+                    <td>{{ issue['Fix Version'] }}</td><td>{{ issue['Severity'] }}</td>
+                    <td>{{ issue['Description'] }}</td><td>{{ issue['Resolution'] }}</td>
+                    <td>{{ issue['Similarity Score'] }}</td>
+                </tr>
+                {% endfor %}
+            </table>
+        </body>
+        </html>
+    ''', result_data=result_data)
+
+if __name__ == '__main__':
+    app.run(debug=True)
