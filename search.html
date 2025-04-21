@@ -1,0 +1,55 @@
+<!-- search.html -->
+<html>
+<head>
+  <title>Defect Assistant 🔍</title>
+  <style>
+    body {
+      font-family: Arial;
+      background: #f9f9f9;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+    }
+    h1 { color: #333; }
+    input[type="text"] {
+      width: 60%;
+      padding: 12px;
+      font-size: 18px;
+      margin-bottom: 20px;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      background: #4CAF50;
+      color: white;
+      border: none;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <h1>🧠 AI Defect Assistant</h1>
+  <form method="POST" action="submit_query.py">
+    <input type="text" name="query" placeholder="Enter defect description..." required />
+    <br>
+    <button type="submit" onclick="submitQuery()">Search</button>
+  </form>
+
+  <script>
+    function submitQuery() {
+      const query = document.querySelector('input[name="query"]').value;
+      // Save to a temporary file (only works locally with Python support)
+      fetch('save_query.txt', {
+        method: 'POST',
+        headers: {'Content-Type': 'text/plain'},
+        body: query
+      }).then(() => {
+        // Call the Python script to show results
+        window.location.href = "run_results.bat";
+      });
+    }
+  </script>
+</body>
+</html>
