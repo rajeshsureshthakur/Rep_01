@@ -2,6 +2,17 @@ import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from IPython.display import HTML, display
+import webbrowser
+import os
+
+# Save the HTML to a file
+html_path = "defect_results.html"
+with open(html_path, "w", encoding="utf-8") as f:
+    f.write(html_output)
+
+# Open the saved file in the default browser
+webbrowser.open('file://' + os.path.realpath(html_path))
+
 
 # Load the historical defect data with error handling for CSV parsing issues
 try:
