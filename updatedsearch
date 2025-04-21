@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Defect Assistant</title>
+</head>
+<body>
+    <h2>🔍 Defect Search</h2>
+    <form action="save_query.bat" method="get">
+        <label for="query">Enter your issue description:</label><br><br>
+        <input type="text" id="query" name="query" size="80"><br><br>
+        <input type="submit" value="Search">
+    </form>
+</body>
+</html>
+
+
+
+@echo off
+:: Read query param from browser and write to query.txt
+setlocal enabledelayedexpansion
+for %%A in (%*) do (
+    set "arg=%%~A"
+    echo !arg:*query=!= >> query.txt
+)
+
+:: Now run the Python script
+python defect_assistant.py
+
+:: Exit
+exit
+
+
+
+
+# Read the user's query from the file
+with open("query.txt", "r", encoding="utf-8") as file:
+    user_query = file.read().strip()
