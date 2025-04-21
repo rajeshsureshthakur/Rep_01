@@ -1,0 +1,5 @@
+# Vectorize the issue descriptions
+def prepare_vectorizer(df):
+    vectorizer = TfidfVectorizer(stop_words='english')
+    tfidf_matrix = vectorizer.fit_transform(df['Description'])
+    return vectorizer, tfidf_matrix
