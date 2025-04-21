@@ -1,0 +1,211 @@
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from flask import Flask, render_template_string, request
+import os
+
+app = Flask(__name__)
+
+# Load the historical defect data with error handling for CSV parsing issues
+def load_data():
+    try:
+        # Adding error_bad_lines=False (renamed to on_bad_lines='skip' in newer pandas versions)
+        if pd.__version__ >= '1.3.0':
+            df = pd.read_csv("defects.csv", on_bad_lines='skip')  # For newer pandas versions
+        else:
+            df = pd.read_csv("defects.csv", error_bad_lines=False)  # For older pandas versions
+        
+        return df
+    except Exception as e:
+        print(f"Error loading CSV: {e}")
+        return None
+
+# Vectorize the issue descriptions
+def prepare_vectorizer(df):
+    vectorizer = TfidfVectorizer(stop_words='english')
+    tfidf_matrix = vectorizer.fit_transform(df['Description'])
+    return vectorizer, tfidf_matrix
+
+# Function to find similar issues with duplicate filtering
+def find_similar_issues(user_input, df, vectorizer, tfidf_matrix, top_n=3, similarity_threshold=0.95):
+    user_tfidf = vectorizer.transform([user_input])
+    cosine_sim = cosine_similarity(user_tfidf, tfidf_matrix).flatten()
+    
+    # Get all indices sorted by similarity
+    sorted_indices = cosine_sim.argsort()[::-1]
+    
+    # Filter to keep only unique content
+    unique_issues = []
+    seen_descriptions = set()
+    
+    for idx in sorted_indices:
+        description = df.iloc[idx]['Description']
+        # Create a simplified version for comparison (lowercase, trimmed)
+        simple_desc = description.lower().strip()
+        
+        # Skip if we've seen a very similar description or if similarity is too low
+        if simple_desc in seen_descriptions or cosine_sim[idx] < 0.01:
+            continue
+            
+        # Check if this issue is too similar to any we've already added
+        too_similar = False
+        for existing_idx in unique_issues:
+            existing_desc = df.iloc[existing_idx]['Description']
+            # If descriptions are very similar based on simple string comparison
+            if cosine_similarity(
+                vectorizer.transform([description]), 
+                vectorizer.transform([existing_desc])
+            )[0][0] > similarity_threshold:
+                too_similar = True
+                break
+                
+        if not too_similar:
+            unique_issues.append(idx)
+            seen_descriptions.add(simple_desc)
+            
+        # Stop once we have enough unique issues
+        if len(unique_issues) >= top_n:
+            break
+    
+    return unique_issues, cosine_sim
+
+# Flask route for the home page with the search form
+@app.route('/')
+def home():
+    return render_template_string('''
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Defect Assistant</title>
+            <style>
+                body {
+                    font-family: Arial, sans-serif;
+                    text-align: center;
+                    margin: 30px;
+                }
+                input[type="text"] {
+                    padding: 10px;
+                    width: 60%;
+                    font-size: 18px;
+                    margin-bottom: 10px;
+                }
+                input[type="submit"] {
+                    padding: 10px;
+                    font-size: 18px;
+                    cursor: pointer;
+                }
+            </style>
+        </head>
+        <body>
+            <h2>🔍 Defect Assistant - Search for Similar Issues</h2>
+            <form action="/search" method="post">
+                <input type="text" name="user_query" placeholder="Enter defect description" required>
+                <input type="submit" value="Search">
+            </form>
+        </body>
+        </html>
+    ''')
+
+# Flask route for handling search and showing results
+@app.route('/search', methods=['POST'])
+def search():
+    user_query = request.form['user_query']
+    
+    # Load the data and vectorizer
+    df = load_data()
+    if df is None:
+        return "Error loading data. Please check your CSV file."
+    
+    vectorizer, tfidf_matrix = prepare_vectorizer(df)
+    
+    # Find similar issues based on user query
+    unique_issues, cosine_sim = find_similar_issues(user_query, df, vectorizer, tfidf_matrix)
+    
+    # Prepare the results for display
+    result_data = []
+    for idx in unique_issues:
+        issue_data = {
+            "Issue Key": df.iloc[idx].get('Issue key', 'N/A'),
+            "Summary": df.iloc[idx].get('Summary', 'N/A'),
+            "Status": df.iloc[idx].get('Status', 'N/A'),
+            "Fix Version": df.iloc[idx].get('Fix Version', 'N/A'),
+            "Severity": df.iloc[idx].get('Severity', 'N/A'),
+            "Description": df.iloc[idx]['Description'],
+            "Resolution": df.iloc[idx].get('Comment', 'N/A'),
+            "Similarity Score": f"{cosine_sim[idx]:.2f}"
+        }
+        result_data.append(issue_data)
+    
+    # Render the result table
+    return render_template_string('''
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Defect Assistant - Similar Issues</title>
+            <style>
+                body {
+                    font-family: Arial, sans-serif;
+                    margin: 30px;
+                    padding: 20px;
+                }
+                h3 {
+                    color: #4CAF50;
+                }
+                table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    margin: 20px 0;
+                }
+                th, td {
+                    padding: 12px;
+                    text-align: left;
+                    border: 1px solid #ddd;
+                }
+                th {
+                    background-color: #f2f2f2;
+                }
+                tr:nth-child(even) {
+                    background-color: #f9f9f9;
+                }
+            </style>
+        </head>
+        <body>
+            <h3>🔍 Top similar past issues:</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Issue Key</th>
+                        <th>Summary</th>
+                        <th>Status</th>
+                        <th>Fix Version</th>
+                        <th>Severity</th>
+                        <th>Description</th>
+                        <th>Resolution</th>
+                        <th>Similarity Score</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for issue in result_data %}
+                    <tr>
+                        <td>{{ issue['Issue Key'] }}</td>
+                        <td>{{ issue['Summary'] }}</td>
+                        <td>{{ issue['Status'] }}</td>
+                        <td>{{ issue['Fix Version'] }}</td>
+                        <td>{{ issue['Severity'] }}</td>
+                        <td>{{ issue['Description'] }}</td>
+                        <td>{{ issue['Resolution'] }}</td>
+                        <td>{{ issue['Similarity Score'] }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </body>
+        </html>
+    ''', result_data=result_data)
+
+if __name__ == '__main__':
+    app.run(debug=True)
