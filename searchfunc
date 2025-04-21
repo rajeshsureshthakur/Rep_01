@@ -1,0 +1,98 @@
+@app.route('/search', methods=['POST'])
+def search():
+    user_query = request.form['user_query']
+    
+    # Load the data
+    df = load_data()
+    if df is None:
+        return "Error loading data. Please check your CSV file."
+    
+    # Prepare the vectorizer and tfidf_matrix
+    vectorizer, tfidf_matrix = prepare_vectorizer(df)
+    
+    # Find similar issues based on user query
+    unique_issues, cosine_sim = find_similar_issues(user_query, df, vectorizer, tfidf_matrix, similarity_threshold=0.3)
+    
+    # Prepare the results for display
+    result_data = []
+    for idx in unique_issues:
+        issue_data = {
+            "Issue Key": df.iloc[idx].get('Issue key', 'N/A'),
+            "Summary": df.iloc[idx].get('Summary', 'N/A'),
+            "Status": df.iloc[idx].get('Status', 'N/A'),
+            "Fix Version": df.iloc[idx].get('Fix Version', 'N/A'),
+            "Severity": df.iloc[idx].get('Severity', 'N/A'),
+            "Description": df.iloc[idx]['Description'],
+            "Resolution": df.iloc[idx].get('Comment', 'N/A'),
+            "Similarity Score": f"{cosine_sim[idx]:.2f}"
+        }
+        result_data.append(issue_data)
+    
+    # Render the result table
+    return render_template_string('''
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Defect Assistant - Similar Issues</title>
+            <style>
+                body {
+                    font-family: Arial, sans-serif;
+                    margin: 30px;
+                    padding: 20px;
+                }
+                h3 {
+                    color: #4CAF50;
+                }
+                table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    margin: 20px 0;
+                }
+                th, td {
+                    padding: 12px;
+                    text-align: left;
+                    border: 1px solid #ddd;
+                }
+                th {
+                    background-color: #f2f2f2;
+                }
+                tr:nth-child(even) {
+                    background-color: #f9f9f9;
+                }
+            </style>
+        </head>
+        <body>
+            <h3>🔍 Top similar past issues:</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Issue Key</th>
+                        <th>Summary</th>
+                        <th>Status</th>
+                        <th>Fix Version</th>
+                        <th>Severity</th>
+                        <th>Description</th>
+                        <th>Resolution</th>
+                        <th>Similarity Score</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for issue in result_data %}
+                    <tr>
+                        <td>{{ issue['Issue Key'] }}</td>
+                        <td>{{ issue['Summary'] }}</td>
+                        <td>{{ issue['Status'] }}</td>
+                        <td>{{ issue['Fix Version'] }}</td>
+                        <td>{{ issue['Severity'] }}</td>
+                        <td>{{ issue['Description'] }}</td>
+                        <td>{{ issue['Resolution'] }}</td>
+                        <td>{{ issue['Similarity Score'] }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </body>
+        </html>
+    ''', result_data=result_data)
