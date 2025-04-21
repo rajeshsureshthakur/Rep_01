@@ -1,0 +1,92 @@
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from IPython.display import HTML, display
+
+# Load the historical defect data with error handling for CSV parsing issues
+try:
+    # Adding error_bad_lines=False (renamed to on_bad_lines='skip' in newer pandas versions)
+    if pd.__version__ >= '1.3.0':
+        df = pd.read_csv("defects.csv", on_bad_lines='skip')  # For newer pandas versions
+    else:
+        df = pd.read_csv("defects.csv", error_bad_lines=False)  # For older pandas versions
+    
+    print(f"Loaded {len(df)} rows. Some rows may have been skipped due to parsing errors.")
+except Exception as e:
+    print(f"Error loading CSV: {e}")
+    print("Alternative approach: Try opening and fixing the CSV file in a text editor or Excel.")
+
+# Continue with the rest of the code if the CSV loaded
+df = df.dropna(subset=["Description"])
+
+# Vectorize the issue descriptions
+vectorizer = TfidfVectorizer(stop_words='english')
+tfidf_matrix = vectorizer.fit_transform(df['Description'])
+
+# Function to find similar issues with duplicate filtering
+def find_similar_issues(user_input, top_n=3, similarity_threshold=0.95):
+    user_tfidf = vectorizer.transform([user_input])
+    cosine_sim = cosine_similarity(user_tfidf, tfidf_matrix).flatten()
+    
+    # Get all indices sorted by similarity
+    sorted_indices = cosine_sim.argsort()[::-1]
+    
+    # Filter to keep only unique content
+    unique_issues = []
+    seen_descriptions = set()
+    
+    for idx in sorted_indices:
+        description = df.iloc[idx]['Description']
+        # Create a simplified version for comparison (lowercase, trimmed)
+        simple_desc = description.lower().strip()
+        
+        # Skip if we've seen a very similar description or if similarity is too low
+        if simple_desc in seen_descriptions or cosine_sim[idx] < 0.01:
+            continue
+            
+        # Check if this issue is too similar to any we've already added
+        too_similar = False
+        for existing_idx in unique_issues:
+            existing_desc = df.iloc[existing_idx]['Description']
+            # If descriptions are very similar based on simple string comparison
+            if cosine_similarity(
+                vectorizer.transform([description]), 
+                vectorizer.transform([existing_desc])
+            )[0][0] > similarity_threshold:
+                too_similar = True
+                break
+                
+        if not too_similar:
+            unique_issues.append(idx)
+            seen_descriptions.add(simple_desc)
+            
+        # Stop once we have enough unique issues
+        if len(unique_issues) >= top_n:
+            break
+    
+    # Create HTML output with clickable links
+    html_output = "<h3>🔍 Top similar past issues:</h3>"
+    
+    for i, idx in enumerate(unique_issues):
+        html_output += f"<div style='margin-bottom: 20px; padding: 10px; border: 1px solid #ddd; border-radius: 5px;'>"
+        
+        # Added Issue key as a clickable link
+        if 'Issue key' in df.columns:
+            issue_key = df.iloc[idx]['Issue key']
+            issue_url = f"https://github.com/rajeshsureshthakur/Rep_01/{issue_key}"
+            html_output += f"<p><b>{i+1}. Issue Key:</b> <a href='{issue_url}' target='_blank'>{issue_key}</a></p>"
+        
+        html_output += f"<p><b>Issue:</b> {df.iloc[idx]['Description']}</p>"
+        
+        if 'Comment' in df.columns:
+            html_output += f"<p><b>✅ Resolution:</b> {df.iloc[idx]['Comment']}</p>"
+        
+        html_output += f"<p><b>Similarity Score:</b> {cosine_sim[idx]:.2f}</p>"
+        html_output += "</div>"
+    
+    # Display the HTML output
+    display(HTML(html_output))
+
+# 🔎 Example usage - only call the function once
+user_query = input("Enter your current defect description:\n> ")
+find_similar_issues(user_query)
