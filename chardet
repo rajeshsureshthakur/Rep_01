@@ -1,0 +1,10 @@
+import chardet
+
+# Detect file encoding
+with open('your_file.csv', 'rb') as file:
+    result = chardet.detect(file.read())
+    print(result)
+
+# Use the detected encoding
+df = pd.read_csv('your_file.csv', encoding=result['encoding'])
+print(df.head())
