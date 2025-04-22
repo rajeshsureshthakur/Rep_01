@@ -1,0 +1,43 @@
+def find_similar_issues(user_input, df, vectorizer, tfidf_matrix, top_n=3, similarity_threshold=0.95, min_score=0.5):
+    user_tfidf = vectorizer.transform([user_input])
+    cosine_sim = cosine_similarity(user_tfidf, tfidf_matrix).flatten()
+    
+    # Get all indices sorted by similarity in descending order
+    sorted_indices = cosine_sim.argsort()[::-1]
+
+    unique_issues = []
+    seen_descriptions = set()
+
+    for idx in sorted_indices:
+        score = cosine_sim[idx]
+        
+        # Skip results below the threshold
+        if score < min_score:
+            continue
+
+        description = df.iloc[idx]['Description']
+        simple_desc = description.lower().strip()
+
+        # Avoid near duplicates
+        if simple_desc in seen_descriptions:
+            continue
+
+        too_similar = False
+        for existing_idx in unique_issues:
+            existing_desc = df.iloc[existing_idx]['Description']
+            sim = cosine_similarity(
+                vectorizer.transform([description]),
+                vectorizer.transform([existing_desc])
+            )[0][0]
+            if sim > similarity_threshold:
+                too_similar = True
+                break
+
+        if not too_similar:
+            unique_issues.append(idx)
+            seen_descriptions.add(simple_desc)
+
+        if len(unique_issues) >= top_n:
+            break
+
+    return unique_issues, cosine_sim
