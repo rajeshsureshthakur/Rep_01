@@ -1,0 +1,119 @@
+import pandas as pd
+from flask import Flask, render_template_string, request
+from sentence_transformers import SentenceTransformer, util
+import numpy as np
+
+app = Flask(__name__)
+model = SentenceTransformer('all-MiniLM-L6-v2')  # lightweight semantic model
+
+def load_data():
+    try:
+        df = pd.read_csv("defects.csv", encoding='utf-8', on_bad_lines='skip')
+        df['Description'] = df['Description'].fillna('')
+        return df
+    except Exception as e:
+        print(f"Error loading CSV: {e}")
+        return None
+
+def find_similar_issues(user_input, df, top_n=3, threshold=0.3):
+    descs = df['Description'].tolist()
+    desc_embeddings = model.encode(descs, convert_to_tensor=True)
+    user_embedding = model.encode(user_input, convert_to_tensor=True)
+
+    cosine_scores = util.pytorch_cos_sim(user_embedding, desc_embeddings)[0]
+    top_results = np.argsort(-cosine_scores.cpu().numpy())
+
+    result_data = []
+    for idx in top_results[:top_n * 2]:  # Take more to filter later
+        score = float(cosine_scores[idx])
+        if score < threshold:
+            continue
+        issue_data = {
+            "Issue Key": df.iloc[idx].get('Issue key', 'N/A'),
+            "Summary": df.iloc[idx].get('Summary', 'N/A'),
+            "Status": df.iloc[idx].get('Status', 'N/A'),
+            "Fix Version": df.iloc[idx].get('Fix Version', 'N/A'),
+            "Severity": df.iloc[idx].get('Severity', 'N/A'),
+            "Description": df.iloc[idx]['Description'],
+            "Resolution": df.iloc[idx].get('Comment', 'N/A'),
+            "Similarity Score": f"{score:.2f}"
+        }
+        result_data.append(issue_data)
+        if len(result_data) >= top_n:
+            break
+
+    return result_data
+
+@app.route('/')
+def home():
+    return render_template_string('''
+    <html>
+    <head>
+        <title>Defect Assistant</title>
+        <style>
+            body { font-family: Arial; text-align: center; padding: 50px; }
+            input[type=text] { width: 60%; padding: 10px; font-size: 16px; }
+            input[type=submit] { padding: 10px 20px; font-size: 16px; }
+        </style>
+    </head>
+    <body>
+        <h2>🔍 Defect Assistant - Smart Search</h2>
+        <form method="post" action="/search">
+            <input type="text" name="user_query" placeholder="Enter defect description..." required>
+            <input type="submit" value="Search">
+        </form>
+    </body>
+    </html>
+    ''')
+
+@app.route('/search', methods=['POST'])
+def search():
+    user_query = request.form['user_query']
+    df = load_data()
+    if df is None:
+        return "Failed to load defect data."
+
+    result_data = find_similar_issues(user_query, df)
+
+    return render_template_string('''
+    <html>
+    <head>
+        <title>Search Results</title>
+        <style>
+            table { border-collapse: collapse; width: 100%; margin-top: 30px; }
+            th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+            th { background-color: #f2f2f2; }
+        </style>
+    </head>
+    <body>
+        <h3>🔎 Top Similar Issues:</h3>
+        <table>
+            <tr>
+                <th>Issue Key</th>
+                <th>Summary</th>
+                <th>Status</th>
+                <th>Fix Version</th>
+                <th>Severity</th>
+                <th>Description</th>
+                <th>Resolution</th>
+                <th>Score</th>
+            </tr>
+            {% for issue in result_data %}
+            <tr>
+                <td>{{ issue['Issue Key'] }}</td>
+                <td>{{ issue['Summary'] }}</td>
+                <td>{{ issue['Status'] }}</td>
+                <td>{{ issue['Fix Version'] }}</td>
+                <td>{{ issue['Severity'] }}</td>
+                <td>{{ issue['Description'] }}</td>
+                <td>{{ issue['Resolution'] }}</td>
+                <td>{{ issue['Similarity Score'] }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </body>
+    </html>
+    ''', result_data=result_data)
+
+if __name__ == '__main__':
+    app.run(debug=True)
