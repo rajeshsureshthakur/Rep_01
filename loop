@@ -1,0 +1,28 @@
+for idx in top_results[:top_n * 2]:  # check more and filter by threshold
+    if cosine_sim[idx] < threshold:
+        continue
+
+    description = df.iloc[idx]['Description']
+    simple_desc = description.lower().strip()
+
+    if simple_desc in seen_descriptions:
+        continue
+
+    # Check if too similar to any already added
+    too_similar = False
+    for existing_idx in unique_issues:
+        existing_desc = df.iloc[existing_idx]['Description']
+        sim = cosine_similarity(
+            vectorizer.transform([description]),
+            vectorizer.transform([existing_desc])
+        )[0][0]
+        if sim > similarity_threshold:
+            too_similar = True
+            break
+
+    if not too_similar:
+        unique_issues.append(idx)
+        seen_descriptions.add(simple_desc)
+
+    if len(unique_issues) >= top_n:
+        break
