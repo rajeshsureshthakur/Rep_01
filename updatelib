@@ -1,3 +1,25 @@
+import javax.swing.*;
+
+public class YourApp {
+
+    public static void main(String[] args) {
+        // Show confirmation message in the event dispatch thread to ensure proper UI handling
+        SwingUtilities.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                // Show message dialog before closing the app
+                JOptionPane.showMessageDialog(null, "The tool will now restart to apply updates.",
+                                              "Restart Notice", JOptionPane.INFORMATION_MESSAGE);
+                
+                // Exit the application after the message is shown
+                System.exit(0);
+            }
+        });
+    }
+}
+
+
+
 if (isUpdateRequired(userId)) {
     performUpdate();  // download new jars
     markUpdateDone(userId);  // set DB flag to Y
