@@ -1,0 +1,61 @@
+import java.io.*;
+import java.nio.file.*;
+
+public class MainApp {
+
+    private static final String FLAG_FILE = "init_flag.txt";
+
+    public static void main(String[] args) throws Exception {
+        if (!isInitialized()) {
+            System.out.println("First run: downloading required files...");
+            downloadDependencies();
+            setInitializedFlag();
+
+            // Relaunch the jar
+            relaunchJar();
+            System.exit(0);  // Exit current process
+        }
+
+        // Normal execution after restart
+        System.out.println("Application running with all dependencies.");
+        // Your actual app logic here
+    }
+
+    private static boolean isInitialized() {
+        Path path = Paths.get(FLAG_FILE);
+        try {
+            return Files.exists(path) && Files.readString(path).trim().equalsIgnoreCase("Y");
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    private static void setInitializedFlag() {
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(FLAG_FILE))) {
+            writer.write("Y");
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private static void downloadDependencies() {
+        // Simulate download delay
+        try {
+            Thread.sleep(2000); // Simulate time delay
+            System.out.println("Dependencies downloaded.");
+            // Here you can implement actual download logic
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private static void relaunchJar() throws IOException {
+        String jarPath = new File(MainApp.class.getProtectionDomain()
+                .getCodeSource().getLocation().getPath()).getAbsolutePath();
+
+        System.out.println("Restarting jar: " + jarPath);
+        new ProcessBuilder("java", "-jar", jarPath)
+                .inheritIO()
+                .start();
+    }
+}
