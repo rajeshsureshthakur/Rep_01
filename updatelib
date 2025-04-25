@@ -1,3 +1,14 @@
+if (isUpdateRequired(userId)) {
+    performUpdate();  // download new jars
+    markUpdateDone(userId);  // set DB flag to Y
+    relaunchJar();    // restart automatically
+    System.exit(0);   // exit current instance
+} else {
+    // continue to show main screen or dashboard
+    new Test().setVisible(true);
+}
+
+
 import java.io.*;
 import java.nio.file.*;
 
