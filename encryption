@@ -1,0 +1,15 @@
+. If You Have a Base64-encoded String
+Example string:
+
+java
+Copy
+Edit
+String encryptedBase64 = "4pyTIMOgIGxhIG1vZGU=";
+Convert it to byte[] like this:
+
+java
+Copy
+Edit
+import java.util.Base64;
+
+byte[] encryptedBytes = Base64.getDecoder().decode(encryptedBase64);
