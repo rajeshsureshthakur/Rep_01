@@ -1,0 +1,66 @@
+import javax.crypto.Cipher;
+import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+import java.security.MessageDigest;
+import java.util.Base64;
+
+public class PasswordEncryptor {
+    private static final String ALGORITHM = "AES/CBC/PKCS5Padding";
+    private static final String PASSPHRASE = "your-secure-passphrase";
+
+    public static void main(String[] args) {
+        PasswordEncryptor encryptor = new PasswordEncryptor();
+
+        String password = "nrfla3By";
+
+        // Encrypt
+        byte[] encryptedBytes = encryptor.encrypt(password);
+        String encryptedBase64 = Base64.getEncoder().encodeToString(encryptedBytes);
+        System.out.println("Encrypted (Base64): " + encryptedBase64);
+
+        // Decrypt
+        byte[] decodedBytes = Base64.getDecoder().decode(encryptedBase64);
+        String decryptedPassword = encryptor.decrypt(decodedBytes);
+        System.out.println("Decrypted Password: " + decryptedPassword);
+    }
+
+    public byte[] encrypt(String input) {
+        try {
+            SecretKeySpec key = generateKey(PASSPHRASE);
+            IvParameterSpec iv = generateIV(PASSPHRASE);
+            Cipher cipher = Cipher.getInstance(ALGORITHM);
+            cipher.init(Cipher.ENCRYPT_MODE, key, iv);
+            return cipher.doFinal(input.getBytes("UTF-8"));
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+
+    public String decrypt(byte[] encryptedInput) {
+        try {
+            SecretKeySpec key = generateKey(PASSPHRASE);
+            IvParameterSpec iv = generateIV(PASSPHRASE);
+            Cipher cipher = Cipher.getInstance(ALGORITHM);
+            cipher.init(Cipher.DECRYPT_MODE, key, iv);
+            byte[] decrypted = cipher.doFinal(encryptedInput);
+            return new String(decrypted, "UTF-8");
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+
+    private SecretKeySpec generateKey(String passphrase) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        byte[] hash = digest.digest(passphrase.getBytes("UTF-8"));
+        return new SecretKeySpec(hash, "AES");
+    }
+
+    private IvParameterSpec generateIV(String passphrase) {
+        byte[] iv = new byte[16];
+        byte[] passBytes = passphrase.getBytes();
+        System.arraycopy(passBytes, 0, iv, 0, Math.min(passBytes.length, iv.length));
+        return new IvParameterSpec(iv);
+    }
+}
